@@ -1,0 +1,36 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:views="clr-namespace:XeryonEtherCAT.App.Views"
+        xmlns:vm="clr-namespace:XeryonEtherCAT.App.ViewModels"
+        mc:Ignorable="d"
+        x:Class="XeryonEtherCAT.App.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Xeryon EtherCAT Test Utility"
+        Width="960"
+        Height="600">
+    <Grid RowDefinitions="Auto,*" Margin="16">
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock Text="Xeryon Multi-Axis Test Utility" FontWeight="Bold" FontSize="20" />
+            <Border Background="{DynamicResource SystemAccentColor}" CornerRadius="4" Padding="8,4" Margin="12,0,0,0">
+                <TextBlock Text="{Binding ConnectionStatus}" Foreground="White" />
+            </Border>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Axes}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Vertical" Spacing="12" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <views:AxisControl Margin="0,0,0,8" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</Window>
