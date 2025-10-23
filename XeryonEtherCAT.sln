@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.Core", "XeryonEtherCAT.Core\XeryonEtherCAT.Core.csproj", "{F0004425-974C-4818-A426-C6EBC6DDC972}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.Ethercat", "XeryonEtherCAT.Ethercat\XeryonEtherCAT.Ethercat.csproj", "{F82DF57C-90CB-4091-9AC7-50A576597337}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.App", "XeryonEtherCAT.App\XeryonEtherCAT.App.csproj", "{F8A0BD6A-4432-4224-9FD4-A04B27EA782E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F0004425-974C-4818-A426-C6EBC6DDC972}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F0004425-974C-4818-A426-C6EBC6DDC972}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F0004425-974C-4818-A426-C6EBC6DDC972}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F0004425-974C-4818-A426-C6EBC6DDC972}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F82DF57C-90CB-4091-9AC7-50A576597337}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F82DF57C-90CB-4091-9AC7-50A576597337}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F82DF57C-90CB-4091-9AC7-50A576597337}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F82DF57C-90CB-4091-9AC7-50A576597337}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F8A0BD6A-4432-4224-9FD4-A04B27EA782E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F8A0BD6A-4432-4224-9FD4-A04B27EA782E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F8A0BD6A-4432-4224-9FD4-A04B27EA782E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F8A0BD6A-4432-4224-9FD4-A04B27EA782E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
