@@ -1,0 +1,144 @@
+<Window x:Class="XeryonEtherCAT.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:XeryonEtherCAT.App.ViewModels"
+        Title="Xeryon EtherCAT Test Utility"
+        Width="900"
+        Height="600"
+        WindowStartupLocation="CenterScreen">
+    <DockPanel Margin="12">
+        <Border DockPanel.Dock="Top"
+                Background="#222222"
+                Padding="12"
+                CornerRadius="6"
+                Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Network interface:" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <ComboBox Width="220"
+                          ItemsSource="{Binding Interfaces}"
+                          SelectedItem="{Binding SelectedInterface}"
+                          DisplayMemberPath="DisplayName"
+                          Margin="0,0,8,0" />
+                <Button Content="Refresh" Command="{Binding RefreshInterfacesCommand}" Margin="0,0,8,0" />
+                <Button Content="Connect" Command="{Binding ConnectCommand}" Margin="0,0,8,0" />
+                <Button Content="Disconnect" Command="{Binding DisconnectCommand}" Margin="0,0,8,0" />
+                <TextBlock Text="{Binding StatusMessage}"
+                           Foreground="White"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           Margin="12,0,0,0" />
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Axes}">
+                <ItemsControl.Resources>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="{StaticResource CardBackgroundBrush}" />
+                        <Setter Property="CornerRadius" Value="8" />
+                        <Setter Property="Padding" Value="12" />
+                        <Setter Property="Margin" Value="0,0,0,12" />
+                    </Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                    </Style>
+                </ItemsControl.Resources>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:AxisViewModel}">
+                        <Border>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0"
+                                           Grid.Column="0"
+                                           Grid.ColumnSpan="3"
+                                           Text="{Binding Name}"
+                                           FontSize="20"
+                                           FontWeight="Bold" />
+                                <TextBlock Grid.Row="0"
+                                           Grid.Column="3"
+                                           Grid.ColumnSpan="2"
+                                           Text="{Binding StatusSummary}"
+                                           HorizontalAlignment="Right"
+                                           Foreground="#90ee90" />
+
+                                <TextBlock Grid.Row="1"
+                                           Grid.Column="0"
+                                           Text="Speed"
+                                           VerticalAlignment="Center"
+                                           Margin="0,8,8,0" />
+                                <TextBox Grid.Row="1"
+                                         Grid.Column="1"
+                                         Width="80"
+                                         Text="{Binding Speed, UpdateSourceTrigger=PropertyChanged}"
+                                         Margin="0,8,8,0" />
+                                <TextBlock Grid.Row="1"
+                                           Grid.Column="2"
+                                           Text="Step"
+                                           VerticalAlignment="Center"
+                                           Margin="0,8,8,0" />
+                                <TextBox Grid.Row="1"
+                                         Grid.Column="3"
+                                         Width="80"
+                                         Text="{Binding StepSize, UpdateSourceTrigger=PropertyChanged}"
+                                         Margin="0,8,8,0" />
+                                <StackPanel Grid.Row="1"
+                                            Grid.Column="4"
+                                            Orientation="Horizontal"
+                                            HorizontalAlignment="Right"
+                                            Margin="0,8,0,0">
+                                    <Button Content="▲" Command="{Binding StepPositiveCommand}" Width="36" Margin="0,0,6,0" />
+                                    <Button Content="▼" Command="{Binding StepNegativeCommand}" Width="36" />
+                                </StackPanel>
+
+                                <TextBlock Grid.Row="2"
+                                           Grid.Column="0"
+                                           Text="Target"
+                                           VerticalAlignment="Center"
+                                           Margin="0,8,8,0" />
+                                <TextBox Grid.Row="2"
+                                         Grid.Column="1"
+                                         Width="80"
+                                         Text="{Binding TargetPosition, UpdateSourceTrigger=PropertyChanged}"
+                                         Margin="0,8,8,0" />
+                                <StackPanel Grid.Row="2"
+                                            Grid.Column="2"
+                                            Grid.ColumnSpan="2"
+                                            Orientation="Horizontal"
+                                            HorizontalAlignment="Left"
+                                            Margin="0,8,0,0">
+                                    <Button Content="Move" Command="{Binding MoveAbsoluteCommand}" Width="90" Margin="0,0,8,0" />
+                                    <Button Content="Stop" Command="{Binding StopCommand}" Width="90" Margin="0,0,8,0" />
+                                    <Button Content="Reset" Command="{Binding ResetCommand}" Width="90" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Row="3"
+                                            Grid.Column="0"
+                                            Grid.ColumnSpan="5"
+                                            Orientation="Horizontal"
+                                            Margin="0,12,0,0">
+                                    <TextBlock Text="Current:" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding CurrentPosition, StringFormat=F3}" Margin="0,0,16,0" />
+                                    <TextBlock Text="Slot:" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding Slot}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</Window>
