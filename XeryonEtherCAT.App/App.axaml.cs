@@ -23,7 +23,6 @@ public partial class App : Application
             };
 
             desktop.MainWindow = window;
-            _ = viewModel.InitializeAsync();
         }
 
         base.OnFrameworkInitializationCompleted();

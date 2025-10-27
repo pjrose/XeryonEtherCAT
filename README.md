@@ -1,37 +1,31 @@
-# Xeryon EtherCAT Test Utility
+# Xeryon EtherCAT Drive Service
 
-This repository contains a multi-axis control service and a desktop test harness for Xeryon piezo stages that communicate over EtherCAT. The solution is organised in two projects:
-
-- `XeryonEtherCAT.Core` – a reusable library that wraps a SOEM-based EtherCAT master, exposes fault-tolerant services for discovering drives, managing connections, queueing motion commands, and tracking drive state.
-- `XeryonEtherCAT.App` – an Avalonia UI that demonstrates the service with a four-axis dashboard inspired by the serial tooling layout. The UI runs against a simulation master by default so that it can be exercised without hardware.
-
-The EtherCAT interaction is handled through the open-source [Simple Open EtherCAT Master (SOEM)](https://github.com/OpenEtherCATsociety/SOEM) project. A lightweight native shim (`native/soemshim`) exposes the small subset of SOEM functionality that is required by the C# service. When the shim is not available, the managed service automatically falls back to an in-memory simulator so that the rest of the stack remains testable.
+This repository delivers a production-grade EtherCAT client library and an Avalonia dashboard that targets Xeryon drives via the `soem_shim` native library. The managed core orchestrates PDO exchange through SOEM, enforces the Xeryon motion procedures, and exposes a high-level asynchronous API for motion, health monitoring, and automated recovery.
 
 ## Solution layout
 
 ```
 XeryonEtherCAT.sln
 ├── XeryonEtherCAT.Core
-│   ├── Abstractions/IEtherCatMaster.cs
-│   ├── Internal/Simulation/SimulatedEtherCatMaster.cs
-│   ├── Internal/Soem/SoemEtherCatMaster.cs
-│   ├── Models/… (axis state, PDO frames, connection events)
-│   ├── Options/XeryonEtherCatOptions.cs
-│   └── Services/XeryonEtherCatService.cs
-├── XeryonEtherCAT.App
-│   ├── App.axaml / App.axaml.cs
-│   ├── MainWindow.axaml / MainWindow.axaml.cs
-│   ├── ViewModels/… (MVVM wrappers around the core service)
-│   └── Views/AxisControl.axaml (Axis control surface)
-└── native/soemshim
-    ├── soem_shim.c (minimal C wrapper around SOEM)
-    └── CMakeLists.txt (build instructions for the shim)
+│   ├── Abstractions/IEthercatDriveService.cs          # Public surface for applications
+│   ├── Extensions/ServiceCollectionExtensions.cs      # DI registration helper
+│   ├── Internal/Soem/                                 # P/Invoke shim + simulation backend
+│   ├── Models/                                        # DriveStatus, DriveError, status snapshots
+│   ├── Options/EthercatDriveOptions.cs                # Cycle timing and recovery settings
+│   └── Services/EthercatDriveService.cs               # Core implementation with IO loop + command queue
+├── XeryonEtherCAT.App                                 # Avalonia dashboard that exercises the service
+│   ├── Commands/AsyncRelayCommand.cs
+│   ├── MainWindow.axaml (+ .cs)
+│   └── ViewModels/*                                   # Dashboard view model and drive status rows
+└── native/soemshim                                    # C shim around SOEM (see native/README)
 ```
 
-## Building the SOEM shim
+The managed service depends on `soemshim` to communicate with the EtherCAT fieldbus. When the native library is not present the library falls back to an in-memory `SimulatedSoemClient` so that the UI and unit tests can run without hardware.
 
-1. Install the SOEM headers and libraries from the upstream project (or build them from source).
-2. Build the shim library in `native/soemshim`:
+## Building the shim
+
+1. Build SOEM from [upstream](https://github.com/OpenEtherCATsociety/SOEM) or install the headers/libraries from your package manager.
+2. Build the shim from `native/soemshim`:
 
    ```bash
    cd native/soemshim
@@ -39,64 +33,74 @@ XeryonEtherCAT.sln
    cmake --build build --config Release
    ```
 
-   The build produces `libsoemshim.so` (Linux), `libsoemshim.dylib` (macOS), or `soemshim.dll` (Windows).
-3. Place the resulting library on the native probing path of your application (for example next to the executable or in `/usr/local/lib`).
+3. Copy the resulting `soemshim` library next to your application or into a directory that is part of the platform probing path. The managed service loads it via `[DllImport("soemshim")]`.
 
-When the shim cannot be located at runtime, the managed code falls back to the simulator so that the UI remains usable. To talk to real hardware, make sure the shim is available and configure the `NetworkInterfaceName` in `XeryonEtherCatOptions` to match the NIC that is wired into the EtherCAT network.
+## Running the desktop dashboard
 
-## Running the sample UI
-
-1. Restore dependencies and build the solution:
-
-   ```bash
-   dotnet build
-   ```
-
-2. Launch the Avalonia desktop app:
-
-   ```bash
-   dotnet run --project XeryonEtherCAT.App
-   ```
-
-   The dashboard displays four axes, mirroring the order specified in the ESI. Each axis card exposes:
-
-   - Speed control, with Stop/Reset buttons.
-   - Step controls for incremental motion.
-   - Absolute target entry and “Go To Zero” helper.
-   - Live status flags and absolute encoder position.
-
-   When running against real hardware the UI receives live position feedback and status bits via SOEM. In simulation mode the same experience is driven by the managed `SimulatedEtherCatMaster`.
-
-## Working with `XeryonEtherCatService`
-
-`XeryonEtherCatService` encapsulates the EtherCAT session lifecycle:
-
-- Discover drives on a NIC and build a nameable axis catalogue.
-- Maintain a cyclic task that exchanges PDOs at the requested cycle time.
-- Queue commands per axis and translate them into the PDO layout defined in the ESI.
-- Surface `AxisStatusChanged` and `ConnectionStateChanged` events so that higher-level applications can react to status bits, position feedback, timeouts, and reconnects.
-
-A minimal usage example:
-
-```csharp
-var options = new XeryonEtherCatOptions
-{
-    NetworkInterfaceName = "eth1",
-    CycleTime = TimeSpan.FromMilliseconds(20)
-};
-options.AxisNames[1] = "X";
-options.AxisNames[2] = "Y";
-
-await using var service = new XeryonEtherCatService(options);
-await service.StartAsync(CancellationToken.None);
-
-await service.EnqueueCommandAsync(1, XeryonAxisCommand.MoveTo(100_000, 2_000, 200, 200), CancellationToken.None);
+```bash
+dotnet build
+dotnet run --project XeryonEtherCAT.App
 ```
 
-The service automatically reconnects after interruptions when `AutoReconnect` is enabled. Axis commands can be queued by number or by the configured display name. Status updates, including the full set of flags listed in the ESI, are exposed through `XeryonAxis.Status`.
+The Avalonia app boots the `EthercatDriveService` against the in-process simulation backend, rendering a live dashboard with per-slave status, position feedback, and common motion controls (enable/disable, DPOS, SCAN, INDX, HALT, STOP, RSET). Once the native shim is deployed the same UI can drive real hardware by swapping the simulated client with the default SOEM client.
 
-## Next steps
+## Working with `IEthercatDriveService`
 
-- Replace the simulator instance in `MainWindowViewModel` with the real `SoemEtherCatMaster` once the shim is deployed and the machine is connected to the EtherCAT network.
-- Extend `AxisViewModel` to show additional telemetry (slots, encoder validity, end-stop states) or to execute more advanced motion sequences.
-- Integrate the core service into automation workflows by consuming the events and command helpers exposed in `XeryonEtherCAT.Core`.
+```csharp
+var options = new EthercatDriveOptions
+{
+    CyclePeriod = TimeSpan.FromMilliseconds(2)
+};
+
+await using IEthercatDriveService service = new EthercatDriveService(options);
+await service.InitializeAsync("eth1", CancellationToken.None);
+
+await service.EnableAsync(1, true, CancellationToken.None);
+await service.MoveAbsoluteAsync(1, targetPos: 120_000, vel: 40_000, acc: 1200, dec: 1200,
+    settleTimeout: TimeSpan.FromSeconds(5), CancellationToken.None);
+```
+
+The service offers:
+
+* A dedicated IO loop that exchanges PDOs via `soem_exchange_process_data` at a configurable cycle time (1–2 ms by default).
+* A per-slave command queue that stages `DriveRxPDO` frames before the next exchange and observes the Execute/Ack handshake.
+* Strongly typed motion helpers (`MoveAbsoluteAsync`, `JogAsync`, `IndexAsync`, `EnableAsync`, `HaltAsync`, `StopAsync`, `ResetAsync`) that implement the Xeryon PDF procedures, including settle timeouts and status-bit validation.
+* Robust WKC validation, link-loss detection, automated recovery (`soem_try_recover` + re-initialisation), and draining of the SOEM error sink into structured logs.
+* Rich telemetry via `SoemStatusSnapshot` plus a `Faulted` event that surfaces decoded `DriveError` classifications and recommended recovery actions.
+
+For dependency injection scenarios call `services.AddEthercatDriveService()` and resolve `IEthercatDriveService` from the container.
+
+## Native interop contract
+
+The P/Invoke layer binds directly to the `soem_shim` exports:
+
+```csharp
+[DllImport("soemshim")]
+internal static extern IntPtr soem_initialize(string ifname);
+[DllImport("soemshim")]
+internal static extern int soem_write_rxpdo(IntPtr h, int slaveIndex, ref DriveRxPDO pdo);
+// ... see Internal/Soem/SoemShim.cs for the full list
+```
+
+`DriveRxPDO` and `DriveTxPDO` mirror the PDO layout defined by Xeryon. The managed service always populates the 32-byte command field with ASCII keywords (`DPOS`, `SCAN`, `INDX`, `ENBL`, `RSET`, `HALT`, `STOP`) padded with NUL characters.
+
+## Health monitoring & recovery
+
+During every IO cycle the service:
+
+* Calls `soem_get_health` to capture `group_expected_wkc`, `last_wkc`, slave count, and AL status codes.
+* Marks the cycle as degraded when the WKC drops below the expected value and attempts recovery once a strike threshold is exceeded.
+* Drains the SOEM error list via `soem_drain_error_list_r` and logs the result.
+* Decodes the TX PDO status bits into `DriveStatus` flags and maps error conditions to the high-level `DriveErrorCode` enumeration (FollowError, SafetyTimeout, PositionFail, E-Stop, EncoderError, ThermalProtection, EndStopHit, ForceZero, ErrorCompensationFault, UnknownFault).
+
+Faults raise a `SoemFaultEvent` that contains the offending slave, the raw status bits, the decoded error, and the last health snapshot—callers can react by issuing `ResetAsync`/`EnableAsync` or by adjusting motion profiles.
+
+## Simulation backend
+
+`SimulatedSoemClient` implements `ISoemClient` and mimics the SOEM shim so that command packing, status decoding, and the dashboard can be exercised without real hardware. It understands the same command keywords and toggles the ExecuteAck/PositionReached bits to emulate drive behaviour.
+
+Switch between the simulation and the native shim by supplying a different `ISoemClient` instance to `EthercatDriveService`.
+
+## License
+
+This project is distributed under the MIT license. The SOEM project retains its own licensing terms—consult the upstream repository when redistributing the shim or bundling SOEM binaries.
