@@ -2,35 +2,61 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:views="clr-namespace:XeryonEtherCAT.App.Views"
         xmlns:vm="clr-namespace:XeryonEtherCAT.App.ViewModels"
         mc:Ignorable="d"
         x:Class="XeryonEtherCAT.App.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="Xeryon EtherCAT Test Utility"
+        Title="Xeryon EtherCAT Dashboard"
         Width="960"
-        Height="600">
-    <Grid RowDefinitions="Auto,*" Margin="16">
+        Height="640">
+    <Grid RowDefinitions="Auto,Auto,*" Margin="16" RowSpacing="12">
         <StackPanel Orientation="Horizontal" Spacing="12">
-            <TextBlock Text="Xeryon Multi-Axis Test Utility" FontWeight="Bold" FontSize="20" />
-            <Border Background="{DynamicResource SystemAccentColor}" CornerRadius="4" Padding="8,4" Margin="12,0,0,0">
+            <TextBlock Text="Xeryon EtherCAT Dashboard" FontWeight="Bold" FontSize="22" />
+            <Border Background="{DynamicResource SystemAccentColor}" CornerRadius="4" Padding="12,4" Margin="12,0,0,0">
                 <TextBlock Text="{Binding ConnectionStatus}" Foreground="White" />
             </Border>
+            <TextBlock Text="{Binding CycleMetrics}" Margin="16,0,0,0" VerticalAlignment="Center" />
         </StackPanel>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Axes}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Vertical" Spacing="12" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <views:AxisControl Margin="0,0,0,8" />
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </ScrollViewer>
+        <Border Grid.Row="1" Padding="12" Background="#10161A" CornerRadius="6">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="Slave" VerticalAlignment="Center" Foreground="White" />
+                <TextBox Text="{Binding SelectedSlave, Mode=TwoWay}" Width="60" />
+                <TextBlock Text="Target" VerticalAlignment="Center" Foreground="White" />
+                <TextBox Text="{Binding TargetPosition, Mode=TwoWay}" Width="100" />
+                <TextBlock Text="Jog vel" VerticalAlignment="Center" Foreground="White" />
+                <TextBox Text="{Binding JogVelocity, Mode=TwoWay}" Width="100" />
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="20,0,0,0">
+                    <Button Content="Enable" Command="{Binding EnableCommand}" />
+                    <Button Content="Disable" Command="{Binding DisableCommand}" />
+                    <Button Content="Move" Command="{Binding MoveCommand}" />
+                    <Button Content="Index" Command="{Binding IndexCommand}" />
+                    <Button Content="Jog +" Command="{Binding JogPositiveCommand}" />
+                    <Button Content="Jog -" Command="{Binding JogNegativeCommand}" />
+                    <Button Content="Jog Stop" Command="{Binding JogStopCommand}" />
+                    <Button Content="Halt" Command="{Binding HaltCommand}" />
+                    <Button Content="Stop" Command="{Binding StopCommand}" />
+                    <Button Content="Reset" Command="{Binding ResetCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="2" Background="#1B2226" CornerRadius="6" Padding="12">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Drives}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:DriveStatusViewModel">
+                            <Border BorderBrush="#2C3E50" BorderThickness="0,0,0,1" Padding="8">
+                                <Grid ColumnDefinitions="60,120,*">
+                                    <TextBlock Text="{Binding Slave}" FontWeight="Bold" />
+                                    <TextBlock Grid.Column="1" Text="{Binding Position}" />
+                                    <TextBlock Grid.Column="2" Text="{Binding StatusText}" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
     </Grid>
 </Window>
