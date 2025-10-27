@@ -1,0 +1,30 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:viewModels="clr-namespace:XeryonEtherCAT.App.ViewModels"
+             x:Class="XeryonEtherCAT.App.Views.AxisControl"
+             x:DataType="viewModels:AxisViewModel">
+    <Border Background="#1E1E1E" BorderBrush="#444" BorderThickness="1" CornerRadius="6" Padding="12">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="Auto,*,Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding Name}" FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Grid.ColumnSpan="2" HorizontalAlignment="Right" VerticalAlignment="Center" Text="{Binding AbsolutePosition, StringFormat=Absolute: {0:F0}}" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Speed" Margin="0,8,8,0" />
+            <NumericUpDown Grid.Row="1" Grid.Column="1" Margin="0,8,8,0" Minimum="1" Maximum="1000000" Increment="50" FormatString="F0" Value="{Binding Speed}" />
+            <Button Grid.Row="1" Grid.Column="2" Margin="0,8,8,0" Content="Stop" Command="{Binding StopCommand}" />
+            <Button Grid.Row="1" Grid.Column="3" Margin="0,8,0,0" Content="Reset" Command="{Binding ResetCommand}" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Step" Margin="0,8,8,0" />
+            <NumericUpDown Grid.Row="2" Grid.Column="1" Margin="0,8,8,0" Minimum="1" Maximum="100000" Increment="100" FormatString="F0" Value="{Binding StepSize}" />
+            <Button Grid.Row="2" Grid.Column="2" Margin="0,8,8,0" Content="Step Down" Command="{Binding StepDownCommand}" />
+            <Button Grid.Row="2" Grid.Column="3" Margin="0,8,0,0" Content="Step Up" Command="{Binding StepUpCommand}" />
+
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="Target" Margin="0,8,8,0" />
+            <NumericUpDown Grid.Row="3" Grid.Column="1" Margin="0,8,8,0" Minimum="-2000000" Maximum="2000000" Increment="100" FormatString="F0" Value="{Binding TargetPosition}" />
+            <Button Grid.Row="3" Grid.Column="2" Margin="0,8,8,0" Content="Move" Command="{Binding MoveToTargetCommand}" />
+            <Button Grid.Row="3" Grid.Column="3" Margin="0,8,0,0" Content="Go To Zero" Command="{Binding GoToZeroCommand}" />
+
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="Status" Margin="0,8,8,0" />
+            <TextBlock Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,8,0,0" Text="{Binding StatusSummary}" TextWrapping="Wrap" />
+        </Grid>
+    </Border>
+</UserControl>

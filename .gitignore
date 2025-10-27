@@ -1,0 +1,15 @@
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.pdb
+*.mdb
+*.opendb
+*.db
+*.log
+**/bin/
+**/obj/
+**/.vs/
+**/AppPackages/
+**/TestResults/
