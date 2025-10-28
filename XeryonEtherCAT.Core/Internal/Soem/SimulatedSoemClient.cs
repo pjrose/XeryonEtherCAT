@@ -151,6 +151,11 @@ public sealed class SimulatedSoemClient : ISoemClient
         return string.Empty;
     }
 
+    public int ListNetworkAdapterNames()
+    {
+        return 0;
+    }
+
     public void Dispose()
     {
         _disposed = true;
@@ -266,15 +271,34 @@ public sealed class SimulatedSoemClient : ISoemClient
 
         public SoemShim.DriveTxPDO CreateTx()
         {
-            var statusValue = (uint)Status;
-            return new SoemShim.DriveTxPDO
+            var tx = new SoemShim.DriveTxPDO
             {
-                ActualPosition = Position,
-                Status4_0 = (byte)(statusValue & 0xFF),
-                Status5 = (byte)((statusValue >> 8) & 0xFF),
-                Status6 = (byte)((statusValue >> 16) & 0xFF),
+                ActualPosition = 0,
+                AmplifiersEnabled = 0,
+                EndStop = 0,
+                ThermalProtection1 = 0,
+                ThermalProtection2 = 0,
+                ForceZero = 0,
+                MotorOn = 0,
+                ClosedLoop = 0,
+                EncoderIndex = 0,
+                EncoderValid = 0,
+                SearchingIndex = 0,
+                PositionReached = 0,
+                ErrorCompensation = 0,
+                EncoderError = 0,
+                Scanning = 0,
+                LeftEndStop = 0,
+                RightEndStop = 0,
+                ErrorLimit = 0,
+                SearchingOptimalFrequency = 0,
+                SafetyTimeout = 0,
+                ExecuteAck = 0,
+                EmergencyStop = 0,
+                PositionFail = 0,
                 Slot = 0
             };
+            return tx;
         }
 
         private static string GetCommandKeyword(byte[] command)
@@ -287,5 +311,7 @@ public sealed class SimulatedSoemClient : ISoemClient
 
             return Encoding.ASCII.GetString(command, 0, Math.Max(0, len)).Trim();
         }
+
+
     }
 }

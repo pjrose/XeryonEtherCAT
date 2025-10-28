@@ -1,6 +1,9 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.VisualStudio.TestPlatform.TestExecutor;
 using System;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using XeryonEtherCAT.Core.Internal.Soem;
 using XeryonEtherCAT.Core.Models;
@@ -29,7 +32,7 @@ public sealed class SoemShimImportTests
     [Fact]
     public void MissingNativeLibrarySurfacesAsDllNotFound()
     {
-        using var client = new SoemClient();
+        using var client = new SoemClient(NullLogger<SoemClient>.Instance);
         var ex = Assert.Throws<DllNotFoundException>(() => client.Initialize("eno1"));
         Assert.Contains("soemshim", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -125,9 +128,10 @@ public sealed class StatusDecodingTests
 
         var tx = new SoemShim.DriveTxPDO
         {
-            Status4_0 = 0b0000_0011,
-            Status5 = 0,
-            Status6 = 0b0000_1001
+            AmplifiersEnabled = 1,
+            EndStop = 1,
+            ExecuteAck = 1,
+            ErrorLimit = 1
         };
 
         var result = (DriveStatus)method.Invoke(null, new object[] { tx })!;

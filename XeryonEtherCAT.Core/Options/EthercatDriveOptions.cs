@@ -15,7 +15,7 @@ public sealed class EthercatDriveOptions
     /// <summary>
     /// Timeout (in microseconds) passed to <c>soem_exchange_process_data</c>.
     /// </summary>
-    public int ExchangeTimeoutMicroseconds { get; set; } = 2000;
+    public int ExchangeTimeoutMicroseconds { get; set; } = 100000;
 
     /// <summary>
     /// Maximum consecutive low-WKC cycles tolerated before attempting recovery.

@@ -1,13 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <CustomBuild Include="F:\VIBES\XeryonEtherCAT\native\soemshim\build\CMakeFiles\a88020c241a1591a9bb18b3cc19d6fef\generate.stamp.rule">
+    <CustomBuild Include="C:\Users\LattePanda\source\repos\XeryonEtherCAT\native\soemshim\build\CMakeFiles\981be57fb1b72bc7680803abfb852477\generate.stamp.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="CMake Rules">
-      <UniqueIdentifier>{C0889005-8F5E-38E3-81C7-23489BEDC26C}</UniqueIdentifier>
+      <UniqueIdentifier>{DC2E0BDD-4ABB-3616-85A4-E3623FC475AE}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

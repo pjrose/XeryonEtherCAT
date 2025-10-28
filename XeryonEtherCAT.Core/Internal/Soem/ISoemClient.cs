@@ -25,5 +25,7 @@ public interface ISoemClient : IDisposable
 
     int TryRecover(IntPtr handle, int timeoutMs);
 
+    int ListNetworkAdapterNames();
+
     string DrainErrorList(IntPtr handle, StringBuilder? buffer = null);
 }

@@ -39,22 +39,61 @@ SOEMSHIM_EXPORT void soem_set_log_callback(soem_log_callback_t cb)
 static void log_message(soem_log_level_t lvl, const char* fmt, ...)
 {
     if (!log_cb) return;
-    char buf[512];
+
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+
+    // First, determine the required size (excluding null terminator)
+    int needed = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
+
+    if (needed < 0) {
+        // Fallback: formatting error, use a static message
+        log_cb(lvl, "log_message: formatting error");
+        return;
+    }
+
+    // Allocate buffer for the formatted message (+1 for null terminator)
+    size_t bufsize = (size_t)needed + 1;
+    char* buf = (bufsize <= 512) ? (char[512]){0} : (char*)malloc(bufsize);
+
+    if (!buf) {
+        log_cb(lvl, "log_message: out of memory");
+        return;
+    }
+
+    va_start(ap, fmt);
+    vsnprintf(buf, bufsize, fmt, ap);
+    va_end(ap);
+
     log_cb(lvl, buf);
+
+    if (bufsize > 512) {
+        free(buf);
+    }
 }
 
 
 SOEMSHIM_EXPORT int soem_drain_error_list(soem_handle_t* h, char* buf, int buf_sz)
 {
-    if (!h || !buf || buf_sz <= 0) return 0;
+    if (!h || !buf || buf_sz <= 0) {
+        LOGE("Invalid arguments: h=%p, buf=%p, buf_sz=%d\n", h, buf, buf_sz);
+        return 0;
+    }
+
     char* err = ecx_elist2string(&h->context);
-    if (!err) { buf[0] = '\0'; return 1; }
+    if (!err) {
+        LOGE("No error string available.\n");
+        buf[0] = '\0';
+        return 1;
+    }
+
     size_t n = strnlen(err, (size_t)buf_sz - 1);
-    memcpy(buf, err, n); buf[n] = '\0';
+    memcpy(buf, err, n);
+    buf[n] = '\0';
+    if(n > 0) {
+        LOGE("Drained error string: %s\n", buf);
+	}
     return 1;
 }
 
@@ -128,7 +167,13 @@ SOEMSHIM_EXPORT int soem_read_txpdo(soem_handle_t* handle, int slave_index, Driv
     if (!handle || !out || slave_index <= 0 || slave_index > handle->context.slavecount) return 0;
 
     ec_slavet* slave = &handle->context.slavelist[slave_index];
-    if ((int)slave->Ibytes < IO_TX_BYTES) return 0;
+    if (!slave || !slave->inputs) return 0;
+
+    // Explicit bounds check to prevent buffer overflow
+    if ((int)slave->Ibytes < IO_TX_BYTES) {
+        LOGE("soem_read_txpdo: slave %d Ibytes too small (%d < %d)", slave_index, (int)slave->Ibytes, IO_TX_BYTES);
+        return 0;
+    }
 
     uint8_t* buf = (uint8_t*)slave->inputs;
 
@@ -181,7 +226,13 @@ SOEMSHIM_EXPORT int soem_write_rxpdo(soem_handle_t* handle, int slave_index, con
     if (!handle || !in || slave_index <= 0 || slave_index > handle->context.slavecount) return 0;
 
     ec_slavet* slave = &handle->context.slavelist[slave_index];
-    if ((int)slave->Obytes < IO_RX_BYTES) return 0;
+    if (!slave || !slave->outputs) return 0;
+
+    // Explicit bounds check to prevent buffer overflow
+    if ((int)slave->Obytes < IO_RX_BYTES) {
+        LOGE("soem_write_rxpdo: slave %d Obytes too small (%d < %d)", slave_index, (int)slave->Obytes, IO_RX_BYTES);
+        return 0;
+    }
 
     uint8_t* buf = (uint8_t*)slave->outputs;
 
@@ -231,20 +282,19 @@ SOEMSHIM_EXPORT int soem_exchange_process_data(
     }
 
     int wkc = ecx_send_processdata(&h->context);
-  
+    int expected = (int)(g->outputsWKC * 2 + g->inputsWKC);
+
     if (wkc < 0) {
-        LOGE("ecx_send_processdata failed rc=%d", wkc);
+        LOGE("ecx_send_processdata failed rc=%d (expected WKC=%d)", wkc, expected);
         return SOEM_ERR_SEND_FAIL;
     }
 
     wkc = ecx_receive_processdata(&h->context, timeout_us);
-    int expected = (int)(g->outputsWKC * 2 + g->inputsWKC);
-
-	h->last_wkc = wkc;  
+    h->last_wkc = wkc;  
     h->last_expected_wkc = expected;
 
     if (wkc < 0) {
-        LOGE("ecx_receive_processdata failed rc=%d (timeout_us=%d)", wkc, timeout_us);
+        LOGE("ecx_receive_processdata failed rc=%d (expected WKC=%d, timeout_us=%d)", wkc, expected, timeout_us);
         return SOEM_ERR_RECV_FAIL;
     }
 
@@ -275,22 +325,24 @@ SOEMSHIM_EXPORT soem_handle_t* soem_initialize(const char* ifname)
     soem_handle_t* handle = (soem_handle_t*)calloc(1, sizeof(soem_handle_t));
     if (!handle) return NULL;
 
-
     handle->last_wkc = -1;
     handle->last_expected_wkc = 0;
 
-
-    //returns greater than 0 if successful
+    // returns greater than 0 if successful
     if (!ecx_init(&handle->context, ifname))
     {
+        LOGE("ecx_init failed for interface '%s'", ifname ? ifname : "(null)");
         free(handle);
         return NULL;
     }
 
-    //returns number of slaves found, if <=0 no slaves found, shutdown.
-    if (ecx_config_init(&handle->context) <= 0)
+    // returns number of slaves found, if <=0 no slaves found, shutdown.
+    int slave_count = ecx_config_init(&handle->context);
+    if (slave_count <= 0)
     {
-        ecx_close(&handle->context); free(handle);
+        LOGE("ecx_config_init failed: no slaves found or error (rc=%d)", slave_count);
+        ecx_close(&handle->context);
+        free(handle);
         return NULL;
     }
 
@@ -298,27 +350,34 @@ SOEMSHIM_EXPORT soem_handle_t* soem_initialize(const char* ifname)
     size_t iomap_size = 64 * 1024;
     handle->IOmap = (uint8*)malloc(iomap_size);
 
-    //if allocation failed, cleanup and exit
+    // if allocation failed, cleanup and exit
     if (!handle->IOmap)
     {
+        LOGE("IOmap allocation failed (size=%zu)", iomap_size);
         ecx_close(&handle->context);
         free(handle);
         return NULL;
     }
-    memset(handle->IOmap, 0, iomap_size); //Zero IOmap after alloc.
+    memset(handle->IOmap, 0, iomap_size); // Zero IOmap after alloc.
 
-    //returns IO map size, if <=0 no IO map configured, shutdown.
+    // returns IO map size, if <=0 no IO map configured, shutdown.
     int actual_size = ecx_config_map_group(&handle->context, handle->IOmap, 0);
-    if (actual_size <= 0 || (size_t)actual_size > iomap_size)
+    if (actual_size <= 0)
     {
-        // Not enough space or mapping failed
-       /* cleanup+fail */
+        LOGE("ecx_config_map_group failed: rc=%d", actual_size);
         ecx_close(&handle->context);
         free(handle->IOmap);
         free(handle);
         return NULL;
     }
-
+    if ((size_t)actual_size > iomap_size)
+    {
+        LOGE("ecx_config_map_group: actual IOmap size (%d) exceeds allocated size (%zu). Aborting to prevent memory corruption.", actual_size, iomap_size);
+        ecx_close(&handle->context);
+        free(handle->IOmap);
+        free(handle);
+        return NULL;
+    }
 
     ecx_configdc(&handle->context);
 
@@ -421,6 +480,23 @@ SOEMSHIM_EXPORT int soem_get_health(soem_handle_t* h, soem_health_t* out)
     if (h->context.slavecount >= 1)
         out->al_status_code = h->context.slavelist[1].ALstatuscode;
 
+    return 1;
+}
+
+SOEMSHIM_EXPORT int soem_get_network_adapters()
+{
+    
+    ec_adaptert* adapter = NULL;
+    ec_adaptert* head = NULL;
+
+    LOGI("\nAvailable adapters:\n");
+    head = adapter = ec_find_adapters();
+    while (adapter != NULL)
+    {
+        LOGI("    - %s  (%s)\n", adapter->name, adapter->desc);
+        adapter = adapter->next;
+    }
+    ec_free_adapters(head);
     return 1;
 }
 

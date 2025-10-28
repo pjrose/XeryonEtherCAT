@@ -28,9 +28,28 @@ public static class SoemShim
     public struct DriveTxPDO
     {
         public int ActualPosition;
-        public byte Status4_0;
-        public byte Status5;
-        public byte Status6;
+        public byte AmplifiersEnabled;
+        public byte EndStop;
+        public byte ThermalProtection1;
+        public byte ThermalProtection2;
+        public byte ForceZero;
+        public byte MotorOn;
+        public byte ClosedLoop;
+        public byte EncoderIndex;
+        public byte EncoderValid;
+        public byte SearchingIndex;
+        public byte PositionReached;
+        public byte ErrorCompensation;
+        public byte EncoderError;
+        public byte Scanning;
+        public byte LeftEndStop;
+        public byte RightEndStop;
+        public byte ErrorLimit;
+        public byte SearchingOptimalFrequency;
+        public byte SafetyTimeout;
+        public byte ExecuteAck;
+        public byte EmergencyStop;
+        public byte PositionFail;
         public byte Slot;
     }
 
@@ -45,6 +64,24 @@ public static class SoemShim
         public int slaves_op;
         public int al_status_code;
     }
+
+
+
+    public enum SoemLogLevel : int
+    {
+        SOEM_LOG_INFO = 0,
+        SOEM_LOG_WARN = 1,
+        SOEM_LOG_ERR = 2
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void SoemLogCallback(SoemLogLevel level, [MarshalAs(UnmanagedType.LPStr)] string message);
+
+    [DllImport("soemshim", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void soem_set_log_callback(SoemLogCallback callback);
+
+    [DllImport("soemshim", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int soem_drain_error_list(IntPtr handle, [MarshalAs(UnmanagedType.LPStr)] StringBuilder buffer, int bufferSize);
 
     [DllImport("soemshim", CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr soem_initialize([MarshalAs(UnmanagedType.LPStr)] string ifname);
@@ -76,6 +113,6 @@ public static class SoemShim
     [DllImport("soemshim", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int soem_try_recover(IntPtr h, int timeoutMs);
 
-    [DllImport("soemshim", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    internal static extern int soem_drain_error_list_r(IntPtr h, StringBuilder buf, int bufSz);
+    [DllImport("soemshim", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int soem_get_network_adapters();
 }

@@ -26,6 +26,10 @@ public sealed class EthercatDriveService : IEthercatDriveService
     private readonly Channel<PendingCommand> _commandChannel;
     private readonly object _lifecycleGate = new();
     private readonly StringBuilder _errorBuffer = new(4096);
+    private DriveErrorCode[] _lastFaults = Array.Empty<DriveErrorCode>();
+    private DateTimeOffset[] _lastFaultTimes = Array.Empty<DateTimeOffset>();
+    private readonly TimeSpan _faultRepeatInterval = TimeSpan.FromSeconds(5);
+
 
     private CancellationTokenSource? _ioCts;
     private Task? _ioTask;
@@ -48,7 +52,8 @@ public sealed class EthercatDriveService : IEthercatDriveService
     {
         _options = options ?? new EthercatDriveOptions();
         _logger = logger ?? NullLogger<EthercatDriveService>.Instance;
-        _soem = soemClient ?? new SoemClient();
+        
+        _soem = soemClient ?? new SoemClient(NullLogger<SoemClient>.Instance);
         _commandChannel = Channel.CreateUnbounded<PendingCommand>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -309,6 +314,18 @@ public sealed class EthercatDriveService : IEthercatDriveService
             _axisLocks[i] = new SemaphoreSlim(1, 1);
             _stopLatch[i] = false;
         }
+
+        _lastFaults = new DriveErrorCode[slaveCount];
+        _lastFaultTimes = new DateTimeOffset[slaveCount];
+        for (var i = 0; i < slaveCount; i++)
+        {
+            _lastFaults[i] = DriveErrorCode.None;
+            _lastFaultTimes[i] = DateTimeOffset.MinValue;
+        }
+
+        _logger.LogInformation(
+            "AllocateBuffers: slaveCount={SlaveCount}, rxPdos={RxPdos}, txPdos={TxPdos}, lastStatuses={LastStatuses}, positions={Positions}, activeCommands={ActiveCommands}, axisLocks={AxisLocks}, stopLatch={StopLatch}",
+            slaveCount, _rxPdos.Length, _txPdos.Length, _lastStatuses.Length, _positions.Length, _activeCommands.Length, _axisLocks.Length, _stopLatch.Length);
     }
 
     private static SoemShim.DriveRxPDO CreateNopPdo()
@@ -526,6 +543,11 @@ public sealed class EthercatDriveService : IEthercatDriveService
 
     private void ProcessStatuses(SoemHealthSnapshot health, int wkc)
     {
+    _logger.LogDebug(
+        "ProcessStatuses: rxPdos={RxPdos}, txPdos={TxPdos}, lastStatuses={LastStatuses}, positions={Positions}, activeCommands={ActiveCommands}, axisLocks={AxisLocks}, stopLatch={StopLatch}",
+        _rxPdos.Length, _txPdos.Length, _lastStatuses.Length, _positions.Length, _activeCommands.Length, _axisLocks.Length, _stopLatch.Length);
+
+
         if (health.LastWkc < health.GroupExpectedWkc)
         {
             HandleFaultyCycle(health, wkc, "Work counter below expected");
@@ -534,71 +556,111 @@ public sealed class EthercatDriveService : IEthercatDriveService
         {
             _wkcStrikes = 0;
         }
-
-        for (var i = 0; i < _txPdos.Length; i++)
+        try
         {
-            var rc = _soem.ReadTxPdo(_handle, i + 1, out var tx);
-            if (rc < 0)
+            for (var i = 0; i < _txPdos.Length; i++)
             {
-                _logger.LogWarning("Failed to read TX PDO for slave {Slave}: {Result}.", i + 1, rc);
-                continue;
-            }
+                int slaveIndex = i + 1;
+                var rc = _soem.ReadTxPdo(_handle, slaveIndex, out var tx);
+                if (rc < 0)
+                {
+                    _logger.LogWarning("Failed to read TX PDO for slave {Slave}: {Result}.", i + 1, rc);
+                    continue;
+                }
 
-            _txPdos[i] = tx;
-            var status = DecodeStatus(tx);
-            _positions[i] = tx.ActualPosition;
-            _lastStatuses[i] = status;
+                _txPdos[i] = tx;
+                var status = DecodeStatus(tx);
+                _positions[i] = tx.ActualPosition;
+                _lastStatuses[i] = status;
 
-            var command = _activeCommands[i];
-            if (command is null)
-            {
-                continue;
-            }
+                var command = _activeCommands[i];
+                if (command is null)
+                {
+                    continue;
+                }
 
-            if (command.Cancelled)
-            {
-                _activeCommands[i] = null;
-                continue;
-            }
+                if (command.Cancelled)
+                {
+                    _activeCommands[i] = null;
+                    continue;
+                }
 
-            if (!command.Acked && status.HasFlag(DriveStatus.ExecuteAck))
-            {
-                command.MarkAcked();
-                _logger.LogDebug("Command {Command} acknowledged for slave {Slave}.", command.Keyword, i + 1);
-            }
+                if (!command.Acked && status.HasFlag(DriveStatus.ExecuteAck))
+                {
+                    command.MarkAcked();
+                    _logger.LogDebug("Command {Command} acknowledged for slave {Slave}.", command.Keyword, i + 1);
+                }
 
-            if (TryDecodeError(status, out var error))
-            {
-                command.Fail(error);
-                RaiseFault(i + 1, status, error, health);
-                _activeCommands[i] = null;
-                continue;
-            }
 
-            if (health.AlStatusCode != 0)
-            {
-                var alError = new DriveError(DriveErrorCode.UnknownFault, $"AL status code {health.AlStatusCode}", "Inspect EtherCAT network and recover.");
-                command.Fail(alError);
-                RaiseFault(i + 1, status, alError, health);
-                _activeCommands[i] = null;
-                continue;
-            }
+                var k = command.Keyword?.Trim().ToUpperInvariant();
+                var isRecoveryCommand = (k == "RSET" || k == "ENBL" || k == "STOP" || k == "HALT" || k == "INDX" || k=="SCAN");
 
-            var result = command.Evaluate(status, tx.ActualPosition);
-            if (result == CommandState.Completed)
-            {
-                command.Complete();
-                _activeCommands[i] = null;
-            }
-            else if (result == CommandState.TimedOut)
-            {
-                var timeoutError = new DriveError(DriveErrorCode.SafetyTimeout, $"Command {command.Keyword} timed out.", "Issue ENBL=1 or RSET, then retry with adjusted profile.");
-                command.Fail(timeoutError);
-                RaiseFault(i + 1, status, timeoutError, health);
-                _activeCommands[i] = null;
+
+                // inside ProcessStatuses, replace the current TryDecodeError(...) handling with this block
+                if (TryDecodeError(status, out var error))
+                {
+                    // Always notify the system about the fault (RaiseFault is throttled).
+                    RaiseFault(i + 1, status, error, health);
+
+                    // Allow recovery/control commands to proceed (do not fail them).
+                    if (!isRecoveryCommand)
+                    {
+                        command.Fail(error);
+                        _activeCommands[i] = null;
+                        continue;
+                    }
+
+                    _logger.LogDebug("Recoverable fault present but allowing recovery command {Command} for slave {Slave}.", command.Keyword, i + 1);
+                }
+                else
+                {
+                    // No decoded error this cycle — clear last-fault tracking so a future fault will be raised again.
+                    if (i >= 0 && i < _lastFaults.Length)
+                    {
+                        _lastFaults[i] = DriveErrorCode.None;
+                        _lastFaultTimes[i] = DateTimeOffset.MinValue;
+                    }
+                }
+
+
+                if (health.AlStatusCode != 0)
+                {
+                    var alError = new DriveError(DriveErrorCode.UnknownFault, $"AL status code {health.AlStatusCode}", "Inspect EtherCAT network and recover.");
+                    command.Fail(alError);
+                    RaiseFault(i + 1, status, alError, health);
+                    _activeCommands[i] = null;
+                    continue;
+                }
+
+                var result = command.Evaluate(status, tx.ActualPosition);
+                if (result == CommandState.Completed)
+                {
+                    command.Complete();
+                    _activeCommands[i] = null;
+                }
+                else if (result == CommandState.TimedOut)
+                {
+                    var timeoutError = new DriveError(DriveErrorCode.SafetyTimeout, $"Command {command.Keyword} timed out.", "Issue ENBL=1 or RSET, then retry with adjusted profile.");
+                    command.Fail(timeoutError);
+                    RaiseFault(i + 1, status, timeoutError, health);
+                    _activeCommands[i] = null;
+                }
             }
         }
+        catch (Exception e)
+        {
+            _logger.LogError(e, null, null!);
+;        }
     }
+
+    // helper to classify recovery/control commands
+    private static bool IsRecoveryCommand(PendingCommand? cmd)
+    {
+        if (cmd is null) return false;
+        var k = cmd.Keyword?.Trim().ToUpperInvariant();
+        return k == "RSET" || k == "ENBL" || k == "STOP" || k == "HALT" || k == "INDX" || k == "SCAN";
+    }
+
 
     private void HandleFaultyCycle(SoemHealthSnapshot health, int wkc, string reason)
     {
@@ -684,10 +746,32 @@ public sealed class EthercatDriveService : IEthercatDriveService
 
     private static DriveStatus DecodeStatus(in SoemShim.DriveTxPDO tx)
     {
-        uint status = tx.Status4_0;
-        status |= (uint)tx.Status5 << 8;
-        status |= (uint)tx.Status6 << 16;
-        return (DriveStatus)status;
+        DriveStatus status = DriveStatus.None;
+
+        if (tx.AmplifiersEnabled != 0) status |= DriveStatus.AmplifiersEnabled;
+        if (tx.EndStop != 0) status |= DriveStatus.EndStop;
+        if (tx.ThermalProtection1 != 0) status |= DriveStatus.ThermalProtection1;
+        if (tx.ThermalProtection2 != 0) status |= DriveStatus.ThermalProtection2;
+        if (tx.ForceZero != 0) status |= DriveStatus.ForceZero;
+        if (tx.MotorOn != 0) status |= DriveStatus.MotorOn;
+        if (tx.ClosedLoop != 0) status |= DriveStatus.ClosedLoop;
+        if (tx.EncoderIndex != 0) status |= DriveStatus.EncoderAtIndex;
+        if (tx.EncoderValid != 0) status |= DriveStatus.EncoderValid;
+        if (tx.SearchingIndex != 0) status |= DriveStatus.SearchingIndex;
+        if (tx.PositionReached != 0) status |= DriveStatus.PositionReached;
+        if (tx.ErrorCompensation != 0) status |= DriveStatus.ErrorCompensation;
+        if (tx.EncoderError != 0) status |= DriveStatus.EncoderError;
+        if (tx.Scanning != 0) status |= DriveStatus.Scanning;
+        if (tx.LeftEndStop != 0) status |= DriveStatus.LeftEndStop;
+        if (tx.RightEndStop != 0) status |= DriveStatus.RightEndStop;
+        if (tx.ErrorLimit != 0) status |= DriveStatus.ErrorLimit;
+        if (tx.SearchingOptimalFrequency != 0) status |= DriveStatus.SearchingOptimalFrequency;
+        if (tx.SafetyTimeout != 0) status |= DriveStatus.SafetyTimeout;
+        if (tx.ExecuteAck != 0) status |= DriveStatus.ExecuteAck;
+        if (tx.EmergencyStop != 0) status |= DriveStatus.EmergencyStop;
+        if (tx.PositionFail != 0) status |= DriveStatus.PositionFail;
+
+        return status;
     }
 
     private static bool TryDecodeError(DriveStatus status, out DriveError error)
@@ -750,10 +834,33 @@ public sealed class EthercatDriveService : IEthercatDriveService
         return false;
     }
 
+    // replace existing RaiseFault with this throttled version
     private void RaiseFault(int slave, DriveStatus status, DriveError error, SoemHealthSnapshot health)
     {
-        _logger.LogError("Slave {Slave} fault: {Error} status={Status:X}", slave, error, (uint)status);
-        Faulted?.Invoke(this, new SoemFaultEvent(slave, status, error, health));
+        try
+        {
+            var idx = slave - 1;
+            var now = DateTimeOffset.UtcNow;
+            if (idx >= 0 && idx < _lastFaults.Length)
+            {
+                // Suppress identical, frequent repeats
+                if (_lastFaults[idx] == error.Code && (now - _lastFaultTimes[idx]) < _faultRepeatInterval)
+                {
+                    _logger.LogDebug("Suppressing duplicate fault for slave {Slave} code={Code}.", slave, error.Code);
+                    return;
+                }
+
+                _lastFaults[idx] = error.Code;
+                _lastFaultTimes[idx] = now;
+            }
+
+            _logger.LogError("Slave {Slave} fault: {Error} status={Status:X}", slave, error, (uint)status);
+            Faulted?.Invoke(this, new SoemFaultEvent(slave, status, error, health));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error while raising fault for slave {Slave}.", slave);
+        }
     }
 
     private enum CommandCompletion
@@ -846,6 +953,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
             pdo.Execute = (byte)(Acked && RequiresAck ? 0 : 1);
         }
 
+        //control completions don't require Acked
         public CommandState Evaluate(DriveStatus status, int actualPosition)
         {
             if (_timeout > TimeSpan.Zero && _stopwatch.Elapsed > _timeout)
@@ -856,11 +964,12 @@ public sealed class EthercatDriveService : IEthercatDriveService
             return _completion switch
             {
                 CommandCompletion.AckOnly => Acked ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.PositionReached => Acked && status.HasFlag(DriveStatus.PositionReached) ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Indexed => Acked && status.HasFlag(DriveStatus.EncoderValid) && status.HasFlag(DriveStatus.PositionReached) ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Enabled => Acked && status.HasFlag(DriveStatus.AmplifiersEnabled) && status.HasFlag(DriveStatus.MotorOn) ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Disabled => Acked && !status.HasFlag(DriveStatus.AmplifiersEnabled) ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Halt => Acked && !status.HasFlag(DriveStatus.Scanning) ? CommandState.Completed : CommandState.Pending,
+                // motion/completion checks use status bits directly (don't require Acked)
+                CommandCompletion.PositionReached => status.HasFlag(DriveStatus.PositionReached) ? CommandState.Completed : CommandState.Pending,
+                CommandCompletion.Indexed => (status.HasFlag(DriveStatus.EncoderValid) && status.HasFlag(DriveStatus.PositionReached)) ? CommandState.Completed : CommandState.Pending,
+                CommandCompletion.Enabled => (status.HasFlag(DriveStatus.AmplifiersEnabled) && status.HasFlag(DriveStatus.MotorOn)) ? CommandState.Completed : CommandState.Pending,
+                CommandCompletion.Disabled => !status.HasFlag(DriveStatus.AmplifiersEnabled) ? CommandState.Completed : CommandState.Pending,
+                CommandCompletion.Halt => !status.HasFlag(DriveStatus.Scanning) ? CommandState.Completed : CommandState.Pending,
                 _ => CommandState.Pending,
             };
         }
