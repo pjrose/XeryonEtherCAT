@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.Core", "Xery
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.App", "XeryonEtherCAT.App\XeryonEtherCAT.App.csproj", "{824A27EB-BED1-4962-AF93-05323104E3B0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.Core.Tests", "XeryonEtherCAT.Core.Tests\XeryonEtherCAT.Core.Tests.csproj", "{B867D01A-E4F0-4A0A-BD74-B8F9CBE98388}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.ConsoleHarness", "XeryonEtherCAT.ConsoleHarness\XeryonEtherCAT.ConsoleHarness.csproj", "{830A58D9-B206-4E91-99B4-EFBBE3740C79}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +28,13 @@ Global
 		{824A27EB-BED1-4962-AF93-05323104E3B0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{824A27EB-BED1-4962-AF93-05323104E3B0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{824A27EB-BED1-4962-AF93-05323104E3B0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B867D01A-E4F0-4A0A-BD74-B8F9CBE98388}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B867D01A-E4F0-4A0A-BD74-B8F9CBE98388}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B867D01A-E4F0-4A0A-BD74-B8F9CBE98388}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B867D01A-E4F0-4A0A-BD74-B8F9CBE98388}.Release|Any CPU.Build.0 = Release|Any CPU
+		{830A58D9-B206-4E91-99B4-EFBBE3740C79}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{830A58D9-B206-4E91-99B4-EFBBE3740C79}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{830A58D9-B206-4E91-99B4-EFBBE3740C79}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{830A58D9-B206-4E91-99B4-EFBBE3740C79}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
