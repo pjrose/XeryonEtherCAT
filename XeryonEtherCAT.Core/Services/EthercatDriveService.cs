@@ -190,6 +190,43 @@ public sealed class EthercatDriveService : IEthercatDriveService
         _stopLatch[axis] = true;
     }
 
+    public async Task SendRawCommandAsync(
+        int slave,
+        string keyword,
+        int parameter,
+        int velocity = 0,
+        ushort acceleration = 0,
+        ushort deceleration = 0,
+        bool requiresAck = true,
+        TimeSpan? timeout = null,
+        CancellationToken ct = default)
+    {
+        EnsureInitialized();
+        if (string.IsNullOrWhiteSpace(keyword))
+        {
+            throw new ArgumentException("Command keyword must be provided.", nameof(keyword));
+        }
+
+        keyword = keyword.Trim().ToUpperInvariant();
+        if (keyword.Length > 32)
+        {
+            throw new ArgumentOutOfRangeException(nameof(keyword), "Command keyword must be 32 characters or fewer.");
+        }
+
+        var axis = GetAxisIndex(slave);
+        var command = PendingCommand.CreateMotion(
+            axis,
+            keyword,
+            parameter,
+            velocity,
+            acceleration,
+            deceleration,
+            timeout ?? TimeSpan.Zero,
+            CommandCompletion.AckOnly,
+            requiresAck);
+        await ExecuteCommandAsync(axis, command, ct).ConfigureAwait(false);
+    }
+
     public SoemStatusSnapshot GetStatus()
         => _snapshot;
 
