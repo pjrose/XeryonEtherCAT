@@ -156,9 +156,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         Dispatcher.UIThread.Post(() =>
         {
-            for (var i = 0; i < Drives.Count && i < snapshot.DriveStatuses.Length; i++)
+            for (var i = 0; i < Drives.Count && i < snapshot.DriveStates.Length; i++)
             {
-                Drives[i].Update(snapshot.ActualPositions.ElementAtOrDefault(i), snapshot.DriveStatuses[i]);
+                Drives[i].Update(snapshot.DriveStates[i]);
             }
 
             CycleMetrics = $"WKC {snapshot.Health.LastWkc}/{snapshot.Health.GroupExpectedWkc} | Cycle {snapshot.CycleTime.TotalMilliseconds:F2} ms";

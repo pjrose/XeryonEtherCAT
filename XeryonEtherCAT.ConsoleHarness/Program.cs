@@ -195,10 +195,11 @@ internal sealed class Harness : IAsyncDisposable
             Console.WriteLine($"IO bytes: out={snapshot.Health.BytesOut} in={snapshot.Health.BytesIn}");
             Console.WriteLine($"Cycle: last={snapshot.CycleTime.TotalMilliseconds:F2} ms min={snapshot.MinCycleTime.TotalMilliseconds:F2} ms max={snapshot.MaxCycleTime.TotalMilliseconds:F2} ms");
 
-            for (var i = 0; i < snapshot.DriveStatuses.Length; i++)
+            for (var i = 0; i < snapshot.DriveStates.Length; i++)
             {
-                var status = snapshot.DriveStatuses[i];
-                Console.WriteLine($"Slave {i + 1}: pos={snapshot.ActualPositions[i]} status=0x{(uint)status:X} [{status}]");
+                var status = snapshot.DriveStates[i];
+                var mask = DriveStateFormatter.ToBitMask(status);
+                Console.WriteLine($"Slave {i + 1}: pos={status.ActualPosition} status=0x{mask:X} [{DriveStateFormatter.Describe(status)}]");
             }
         }
 
@@ -241,9 +242,11 @@ internal sealed class Harness : IAsyncDisposable
                         Console.WriteLine($"  [DEBUG] Health: Found={health.SlavesFound} OP={health.SlavesOperational} WKC={health.LastWkc}/{health.GroupExpectedWkc} BytesOut={health.BytesOut} BytesIn={health.BytesIn} AL={health.AlStatusCode:X}");
                     }
 
-                    for (var i = 0; i < snapshot.DriveStatuses.Length; i++)
+                    for (var i = 0; i < snapshot.DriveStates.Length; i++)
                     {
-                        Console.WriteLine($"  Slave {i + 1}: pos={snapshot.ActualPositions[i]} status=0x{(uint)snapshot.DriveStatuses[i]:X}");
+                        var status = snapshot.DriveStates[i];
+                        var mask = DriveStateFormatter.ToBitMask(status);
+                        Console.WriteLine($"  Slave {i + 1}: pos={status.ActualPosition} status=0x{mask:X}");
                     }
 
                     if (!wkcHealthy)
