@@ -1,4 +1,5 @@
 using System;
+using XeryonEtherCAT.Core.Internal.Soem;
 
 namespace XeryonEtherCAT.Core.Models;
 
@@ -7,12 +8,17 @@ namespace XeryonEtherCAT.Core.Models;
 /// </summary>
 public sealed class SoemStatusSnapshot
 {
-    public SoemStatusSnapshot(DateTimeOffset timestamp, SoemHealthSnapshot health, DriveStatus[] driveStatuses, int[] actualPositions, TimeSpan cycleTime, TimeSpan minCycle, TimeSpan maxCycle)
+    public SoemStatusSnapshot(DateTimeOffset timestamp, SoemHealthSnapshot health, SoemShim.DriveTxPDO[] drives, TimeSpan cycleTime, TimeSpan minCycle, TimeSpan maxCycle)
     {
         Timestamp = timestamp;
         Health = health;
-        DriveStatuses = driveStatuses ?? Array.Empty<DriveStatus>();
-        ActualPositions = actualPositions ?? Array.Empty<int>();
+        DriveStates = drives ?? Array.Empty<SoemShim.DriveTxPDO>();
+        ActualPositions = new int[DriveStates.Length];
+        for (var i = 0; i < DriveStates.Length; i++)
+        {
+            ActualPositions[i] = DriveStates[i].ActualPosition;
+        }
+
         CycleTime = cycleTime;
         MinCycleTime = minCycle;
         MaxCycleTime = maxCycle;
@@ -22,7 +28,7 @@ public sealed class SoemStatusSnapshot
 
     public SoemHealthSnapshot Health { get; }
 
-    public DriveStatus[] DriveStatuses { get; }
+    public SoemShim.DriveTxPDO[] DriveStates { get; }
 
     public int[] ActualPositions { get; }
 

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-using XeryonEtherCAT.Core.Models;
 
 namespace XeryonEtherCAT.Core.Internal.Soem;
 
@@ -186,13 +185,20 @@ public sealed class SimulatedSoemClient : ISoemClient
     {
         public SoemShim.DriveRxPDO Pending;
         public int Position;
-        public DriveStatus Status = DriveStatus.AmplifiersEnabled | DriveStatus.MotorOn | DriveStatus.ClosedLoop | DriveStatus.EncoderValid | DriveStatus.PositionReached;
+        public SoemShim.DriveTxPDO Status;
 
         public void Reset()
         {
             Pending.Command = new byte[32];
             Position = 0;
-            Status = DriveStatus.AmplifiersEnabled | DriveStatus.MotorOn | DriveStatus.ClosedLoop | DriveStatus.EncoderValid | DriveStatus.PositionReached;
+            Status = new SoemShim.DriveTxPDO
+            {
+                AmplifiersEnabled = 1,
+                MotorOn = 1,
+                ClosedLoop = 1,
+                EncoderValid = 1,
+                PositionReached = 1
+            };
         }
 
         public void Process()
@@ -208,98 +214,78 @@ public sealed class SimulatedSoemClient : ISoemClient
                 return;
             }
 
-            Status |= DriveStatus.ExecuteAck;
-            Status &= ~DriveStatus.SafetyTimeout;
-            Status &= ~DriveStatus.ErrorLimit;
-            Status &= ~DriveStatus.PositionFail;
+            Status.ExecuteAck = 1;
+            Status.SafetyTimeout = 0;
+            Status.ErrorLimit = 0;
+            Status.PositionFail = 0;
 
             switch (keyword)
             {
                 case "DPOS":
                     Position = Pending.Parameter;
-                    Status |= DriveStatus.PositionReached;
-                    Status &= ~DriveStatus.Scanning;
+                    Status.PositionReached = 1;
+                    Status.Scanning = 0;
                     break;
                 case "SCAN":
                     if (Pending.Parameter == 0)
                     {
-                        Status &= ~DriveStatus.Scanning;
-                        Status |= DriveStatus.PositionReached;
+                        Status.Scanning = 0;
+                        Status.PositionReached = 1;
                     }
                     else
                     {
-                        Status |= DriveStatus.Scanning;
-                        Status &= ~DriveStatus.PositionReached;
+                        Status.Scanning = 1;
+                        Status.PositionReached = 0;
                         Position += Pending.Parameter * Math.Max(1, Pending.Velocity / 1000);
                     }
                     break;
                 case "INDX":
-                    Status |= DriveStatus.SearchingIndex;
-                    Status |= DriveStatus.EncoderValid;
-                    Status |= DriveStatus.PositionReached;
-                    Status &= ~DriveStatus.SearchingIndex;
+                    Status.SearchingIndex = 1;
+                    Status.EncoderValid = 1;
+                    Status.PositionReached = 1;
+                    Status.SearchingIndex = 0;
                     Position = 0;
                     break;
                 case "ENBL":
                     if (Pending.Parameter == 0)
                     {
-                        Status &= ~(DriveStatus.MotorOn | DriveStatus.ClosedLoop);
+                        Status.AmplifiersEnabled = 0;
+                        Status.MotorOn = 0;
+                        Status.ClosedLoop = 0;
                     }
                     else
                     {
-                        Status |= DriveStatus.AmplifiersEnabled | DriveStatus.MotorOn | DriveStatus.ClosedLoop | DriveStatus.PositionReached;
-                        Status &= ~DriveStatus.ForceZero;
+                        Status.AmplifiersEnabled = 1;
+                        Status.MotorOn = 1;
+                        Status.ClosedLoop = 1;
+                        Status.PositionReached = 1;
+                        Status.ForceZero = 0;
                     }
                     break;
                 case "RSET":
-                    Status &= ~(DriveStatus.ErrorLimit | DriveStatus.SafetyTimeout | DriveStatus.PositionFail | DriveStatus.ForceZero);
-                    Status |= DriveStatus.PositionReached;
+                    Status.ErrorLimit = 0;
+                    Status.SafetyTimeout = 0;
+                    Status.PositionFail = 0;
+                    Status.ForceZero = 0;
+                    Status.PositionReached = 1;
                     break;
                 case "HALT":
-                    Status &= ~DriveStatus.Scanning;
-                    Status |= DriveStatus.PositionReached;
+                    Status.Scanning = 0;
+                    Status.PositionReached = 1;
                     break;
                 case "STOP":
-                    Status |= DriveStatus.ForceZero;
-                    Status &= ~DriveStatus.Scanning;
-                    Status &= ~DriveStatus.PositionReached;
+                    Status.ForceZero = 1;
+                    Status.Scanning = 0;
+                    Status.PositionReached = 0;
                     break;
             }
 
             Pending.Execute = 0;
+            Status.ActualPosition = Position;
         }
 
         public SoemShim.DriveTxPDO CreateTx()
-        {
-            var tx = new SoemShim.DriveTxPDO
-            {
-                ActualPosition = 0,
-                AmplifiersEnabled = 0,
-                EndStop = 0,
-                ThermalProtection1 = 0,
-                ThermalProtection2 = 0,
-                ForceZero = 0,
-                MotorOn = 0,
-                ClosedLoop = 0,
-                EncoderIndex = 0,
-                EncoderValid = 0,
-                SearchingIndex = 0,
-                PositionReached = 0,
-                ErrorCompensation = 0,
-                EncoderError = 0,
-                Scanning = 0,
-                LeftEndStop = 0,
-                RightEndStop = 0,
-                ErrorLimit = 0,
-                SearchingOptimalFrequency = 0,
-                SafetyTimeout = 0,
-                ExecuteAck = 0,
-                EmergencyStop = 0,
-                PositionFail = 0,
-                Slot = 0
-            };
-            return tx;
-        }
+            => Status;
 
         private static string GetCommandKeyword(byte[] command)
         {

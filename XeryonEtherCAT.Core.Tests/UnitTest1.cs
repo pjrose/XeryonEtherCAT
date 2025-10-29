@@ -32,8 +32,7 @@ public sealed class SoemShimImportTests
     [Fact]
     public void MissingNativeLibrarySurfacesAsDllNotFound()
     {
-        using var client = new SoemClient(NullLogger<SoemClient>.Instance);
-        var ex = Assert.Throws<DllNotFoundException>(() => client.Initialize("eno1"));
+        var ex = Assert.Throws<DllNotFoundException>(() => new SoemClient(NullLogger<SoemClient>.Instance));
         Assert.Contains("soemshim", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 }
@@ -51,7 +50,7 @@ public sealed class SoemShimLayoutTests
     public void DriveTxPdoMatchesNativeSize()
     {
         var size = Marshal.SizeOf<SoemShim.DriveTxPDO>();
-        Assert.Equal(8, size);
+        Assert.Equal(27, size);
     }
 }
 
@@ -118,14 +117,11 @@ public sealed class PendingCommandEncodingTests
     }
 }
 
-public sealed class StatusDecodingTests
+public sealed class DriveStateFormatterTests
 {
     [Fact]
-    public void DecodeStatusCombinesBytesIntoFlags()
+    public void ToBitMaskCombinesActiveFlags()
     {
-        var method = typeof(EthercatDriveService).GetMethod("DecodeStatus", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException("DecodeStatus method not found.");
-
         var tx = new SoemShim.DriveTxPDO
         {
             AmplifiersEnabled = 1,
@@ -134,8 +130,7 @@ public sealed class StatusDecodingTests
             ErrorLimit = 1
         };
 
-        var result = (DriveStatus)method.Invoke(null, new object[] { tx })!;
-        var expected = DriveStatus.AmplifiersEnabled | DriveStatus.EndStop | DriveStatus.ExecuteAck | DriveStatus.ErrorLimit;
-        Assert.Equal(expected, result & expected);
+        var mask = DriveStateFormatter.ToBitMask(tx);
+        Assert.Equal((1u << 0) | (1u << 1) | (1u << 19) | (1u << 16), mask);
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using XeryonEtherCAT.Core.Internal.Soem;
 
 namespace XeryonEtherCAT.Core.Models;
 
@@ -7,7 +8,7 @@ namespace XeryonEtherCAT.Core.Models;
 /// </summary>
 public sealed class SoemFaultEvent : EventArgs
 {
-    public SoemFaultEvent(int slave, DriveStatus status, DriveError error, SoemHealthSnapshot health)
+    public SoemFaultEvent(int slave, SoemShim.DriveTxPDO status, DriveError error, SoemHealthSnapshot health)
     {
         Slave = slave;
         Status = status;
@@ -17,7 +18,7 @@ public sealed class SoemFaultEvent : EventArgs
 
     public int Slave { get; }
 
-    public DriveStatus Status { get; }
+    public SoemShim.DriveTxPDO Status { get; }
 
     public DriveError Error { get; }
 

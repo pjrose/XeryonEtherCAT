@@ -10,7 +10,7 @@ XeryonEtherCAT.sln
 │   ├── Abstractions/IEthercatDriveService.cs          # Public surface for applications
 │   ├── Extensions/ServiceCollectionExtensions.cs      # DI registration helper
 │   ├── Internal/Soem/                                 # P/Invoke shim + simulation backend
-│   ├── Models/                                        # DriveStatus, DriveError, status snapshots
+│   ├── Models/                                        # DriveState helpers, DriveError, status snapshots
 │   ├── Options/EthercatDriveOptions.cs                # Cycle timing and recovery settings
 │   └── Services/EthercatDriveService.cs               # Core implementation with IO loop + command queue
 ├── XeryonEtherCAT.App                                 # Avalonia dashboard that exercises the service
@@ -91,7 +91,7 @@ During every IO cycle the service:
 * Calls `soem_get_health` to capture `group_expected_wkc`, `last_wkc`, slave count, and AL status codes.
 * Marks the cycle as degraded when the WKC drops below the expected value and attempts recovery once a strike threshold is exceeded.
 * Drains the SOEM error list via `soem_drain_error_list_r` and logs the result.
-* Decodes the TX PDO status bits into `DriveStatus` flags and maps error conditions to the high-level `DriveErrorCode` enumeration (FollowError, SafetyTimeout, PositionFail, E-Stop, EncoderError, ThermalProtection, EndStopHit, ForceZero, ErrorCompensationFault, UnknownFault).
+* Decodes the TX PDO status bits into friendly `DriveStateFormatter` helpers and maps error conditions to the high-level `DriveErrorCode` enumeration (FollowError, SafetyTimeout, PositionFail, E-Stop, EncoderError, ThermalProtection, EndStopHit, ForceZero, ErrorCompensationFault, UnknownFault).
 
 Faults raise a `SoemFaultEvent` that contains the offending slave, the raw status bits, the decoded error, and the last health snapshot—callers can react by issuing `ResetAsync`/`EnableAsync` or by adjusting motion profiles.
 
