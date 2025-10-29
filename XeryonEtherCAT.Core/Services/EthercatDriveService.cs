@@ -30,6 +30,10 @@ public sealed class EthercatDriveService : IEthercatDriveService
     private DateTimeOffset[] _lastFaultTimes = Array.Empty<DateTimeOffset>();
     private readonly TimeSpan _faultRepeatInterval = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Raised when drive status bits or position changes during command execution.
+    /// </summary>
+    public event EventHandler<DriveStatusChangeEvent>? StatusChanged;
 
     private CancellationTokenSource? _ioCts;
     private Task? _ioTask;
@@ -40,6 +44,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
 
     private SoemShim.DriveRxPDO[] _rxPdos = Array.Empty<SoemShim.DriveRxPDO>();
     private SoemShim.DriveTxPDO[] _txPdos = Array.Empty<SoemShim.DriveTxPDO>();
+    private SoemShim.DriveTxPDO[] _previousTxPdos = Array.Empty<SoemShim.DriveTxPDO>();
     private PendingCommand?[] _activeCommands = Array.Empty<PendingCommand?>();
     private SemaphoreSlim[] _axisLocks = Array.Empty<SemaphoreSlim>();
     private bool[] _stopLatch = Array.Empty<bool>();
@@ -151,6 +156,14 @@ public sealed class EthercatDriveService : IEthercatDriveService
         var axis = GetAxisIndex(slave);
         var snapshot = GetStatus();
         var status = snapshot.DriveStates.Length > axis ? snapshot.DriveStates[axis] : default;
+
+        // If encoder is already valid, return immediately (idempotent behavior)
+        if (status.EncoderValid != 0)
+        {
+            _logger.LogDebug("Slave {Slave} encoder is already valid, skipping indexing command.", slave);
+            return;
+        }
+
         EnsureAxisReadyForMotion(slave, status, requireEncoder: false);
         var timeout = settleTimeout > TimeSpan.Zero ? settleTimeout : _options.DefaultSettleTimeout;
         var command = PendingCommand.CreateMotion(axis, "INDX", direction, vel, acc, dec, timeout, CommandCompletion.Indexed, requiresAck: true);
@@ -161,7 +174,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
     {
         EnsureInitialized();
         var axis = GetAxisIndex(slave);
-        var command = PendingCommand.CreateControl(axis, "RSET", 0, TimeSpan.FromMilliseconds(100), CommandCompletion.AckOnly);
+        var command = PendingCommand.CreateControl(axis, "RSET", 0, TimeSpan.FromMilliseconds(1000), CommandCompletion.AckWithTimeout);
         await ExecuteCommandAsync(axis, command, ct).ConfigureAwait(false);
         _stopLatch[axis] = false;
     }
@@ -170,6 +183,24 @@ public sealed class EthercatDriveService : IEthercatDriveService
     {
         EnsureInitialized();
         var axis = GetAxisIndex(slave);
+
+        // Check current state
+        var snapshot = GetStatus();
+        var status = snapshot.DriveStates.Length > axis ? snapshot.DriveStates[axis] : default;
+
+        // If already in target state, return immediately (idempotent behavior)
+        if (enable && status.AmplifiersEnabled != 0)
+        {
+            _logger.LogDebug("Slave {Slave} is already enabled, skipping command.", slave);
+            return;
+        }
+
+        if (!enable && status.AmplifiersEnabled == 0)
+        {
+            _logger.LogDebug("Slave {Slave} is already disabled, skipping command.", slave);
+            return;
+        }
+
         var completion = enable ? CommandCompletion.Enabled : CommandCompletion.Disabled;
         var command = PendingCommand.CreateControl(axis, "ENBL", enable ? 1 : 0, TimeSpan.FromMilliseconds(500), completion);
         await ExecuteCommandAsync(axis, command, ct).ConfigureAwait(false);
@@ -303,6 +334,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
     {
         _rxPdos = new SoemShim.DriveRxPDO[slaveCount];
         _txPdos = new SoemShim.DriveTxPDO[slaveCount];
+        _previousTxPdos = new SoemShim.DriveTxPDO[slaveCount]; // Add this
         _activeCommands = new PendingCommand?[slaveCount];
         _axisLocks = new SemaphoreSlim[slaveCount];
         _stopLatch = new bool[slaveCount];
@@ -381,14 +413,9 @@ public sealed class EthercatDriveService : IEthercatDriveService
             throw new InvalidOperationException($"Slave {slave} is latched by STOP. Issue ENBL=1 or RSET before motion.");
         }
 
-        if (status.AmplifiersEnabled == 0 || status.MotorOn == 0)
+        if (status.AmplifiersEnabled == 0)
         {
             throw new InvalidOperationException($"Slave {slave} is not enabled. Call EnableAsync before issuing motion commands.");
-        }
-
-        if (status.ClosedLoop == 0)
-        {
-            throw new InvalidOperationException($"Slave {slave} is not in closed-loop mode.");
         }
 
         if (requireEncoder && status.EncoderValid == 0)
@@ -542,7 +569,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
 
     private void ProcessStatuses(SoemHealthSnapshot health, int wkc)
     {
-        _logger.LogDebug(
+        _logger.LogTrace(
             "ProcessStatuses: rxPdos={RxPdos}, txPdos={TxPdos}, activeCommands={ActiveCommands}, axisLocks={AxisLocks}, stopLatch={StopLatch}",
             _rxPdos.Length, _txPdos.Length, _activeCommands.Length, _axisLocks.Length, _stopLatch.Length);
 
@@ -567,9 +594,38 @@ public sealed class EthercatDriveService : IEthercatDriveService
                     continue;
                 }
 
+                // Detect changes
+                var previous = _previousTxPdos[i];
+                var currentMask = DriveStateFormatter.ToBitMask(tx);
+                var previousMask = DriveStateFormatter.ToBitMask(previous);
+                var changedMask = currentMask ^ previousMask;
+                var positionChanged = tx.ActualPosition != previous.ActualPosition;
+
+                // Update stored state
+                _previousTxPdos[i] = tx;
                 _txPdos[i] = tx;
 
                 var command = _activeCommands[i];
+
+                // Raise status change event if anything changed during command execution
+                if ((changedMask != 0 || positionChanged) && (command != null))
+                {
+                    var timestamp = DateTimeOffset.UtcNow;
+                    var statusEvent = new DriveStatusChangeEvent(
+                        slaveIndex,
+                        timestamp,
+                        tx,
+                        previous,
+                        changedMask,
+                        command?.Keyword);
+
+                    // Log the change with millisecond precision
+                    _logger.LogDebug("{StatusChange}", statusEvent.ToString());
+                    
+                    // Raise event
+                    StatusChanged?.Invoke(this, statusEvent);
+                }
+
                 if (command is null)
                 {
                     continue;
@@ -584,7 +640,8 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 if (!command.Acked && tx.ExecuteAck != 0)
                 {
                     command.MarkAcked();
-                    _logger.LogDebug("Command {Command} acknowledged for slave {Slave}.", command.Keyword, slaveIndex);
+                    _logger.LogDebug("[{Timestamp:HH:mm:ss.fff}] Command {Command} acknowledged for slave {Slave}.", 
+                        DateTimeOffset.UtcNow, command.Keyword, slaveIndex);
                 }
 
                 if (TryDecodeError(tx, out var error))
@@ -610,6 +667,8 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 switch (result)
                 {
                     case CommandState.Completed:
+                        _logger.LogDebug("[{Timestamp:HH:mm:ss.fff}] Command {Command} completed for slave {Slave}.", 
+                            DateTimeOffset.UtcNow, command.Keyword, slaveIndex);
                         command.Complete();
                         _activeCommands[i] = null;
                         break;
@@ -710,59 +769,59 @@ public sealed class EthercatDriveService : IEthercatDriveService
 
     private static bool TryDecodeError(SoemShim.DriveTxPDO status, out DriveError error)
     {
-        if (status.ErrorLimit != 0)
+        if (status.ThermalProtection1 != 0)
         {
-            error = new DriveError(DriveErrorCode.FollowError, "Following error exceeded limit.", "Reduce speed/acceleration; issue ENBL=1 to clear.");
+            error = new DriveError(DriveErrorCode.ThermalProtection, "Thermal overload of the piezo amplifier 1.", "Allow drive to cool; issue ENBL=1 or RSET.");
             return true;
         }
 
-        if (status.PositionFail != 0)
+        if (status.ThermalProtection2 != 0)
         {
-            error = new DriveError(DriveErrorCode.PositionFail, "Position window not reached in time.", "Adjust PTO limits and retry after ENBL=1.");
-            return true;
-        }
-
-        if (status.SafetyTimeout != 0)
-        {
-            error = new DriveError(DriveErrorCode.SafetyTimeout, "Safety timeout triggered.", "Issue ENBL=1 or RSET and review motion profile.");
-            return true;
-        }
-
-        if (status.EmergencyStop != 0)
-        {
-            error = new DriveError(DriveErrorCode.EmergencyStop, "Emergency stop active.", "Investigate E-stop input; re-enable drive.");
+            error = new DriveError(DriveErrorCode.ThermalProtection, "Thermal overload of the piezo amplifier 2.", "Allow drive to cool; issue ENBL=1 or RSET.");
             return true;
         }
 
         if (status.EncoderError != 0)
         {
-            error = new DriveError(DriveErrorCode.EncoderError, "Encoder feedback invalid.", "Check encoder wiring; perform RSET then INDX.");
+            error = new DriveError(DriveErrorCode.EncoderError, "Encoder read error.", "Avoid touching the encoder strip. Check encoder wiring; perform RSET then INDX.");
             return true;
         }
 
-        if (status.ThermalProtection1 != 0 || status.ThermalProtection2 != 0)
+        if (status.ErrorLimit != 0)
         {
-            error = new DriveError(DriveErrorCode.ThermalProtection, "Thermal protection active.", "Allow drive to cool; issue RSET once safe.");
+            error = new DriveError(DriveErrorCode.FollowError, "Following error has reached the limit set by ELIM. This can indicate a collision, or the motor not strong enough to produce the acceleration and speed required by the trajectory.", "Reduce speed/acceleration; issue ENBL=1 to clear. Increase ELIM or disable by setting ELIM=0");
             return true;
         }
 
-        if (status.EndStop != 0 || status.LeftEndStop != 0 || status.RightEndStop != 0)
+        if (status.SafetyTimeout != 0)
         {
-            error = new DriveError(DriveErrorCode.EndStopHit, "End-stop detected during motion.", "Jog away from limit or reset limits before retry.");
+            error = new DriveError(DriveErrorCode.SafetyTimeout, "Motor was on for a time longer that the value set by TOU2", "Perform RSET or ENBL=1. Issue STOP or HALT to avoid. TOU2=0 disables this timeout. ");
             return true;
         }
 
-        if (status.ForceZero != 0)
+        if (status.EmergencyStop != 0)
         {
-            error = new DriveError(DriveErrorCode.ForceZero, "Force-zero active; output disabled.", "Issue ENBL=1 to clear before commanding motion.");
+            error = new DriveError(DriveErrorCode.EmergencyStop, "The STOP command was issued." , "Set ENBL=1 or RSET. Use HALT to avoid this error.");
             return true;
         }
 
-        if (status.ErrorCompensation != 0)
+        if (status.PositionFail != 0)
         {
-            error = new DriveError(DriveErrorCode.ErrorCompensationFault, "Error compensation failure reported.", "Issue RSET then ENBL=1; review compensation tables.");
+            error = new DriveError(DriveErrorCode.PositionFail, "The actuator did not settle at the target position within the specified time (TOU3).", "Increase TOU3, PTOL or PTO2. Issue ENBL=1 or RSET");
             return true;
         }
+           
+        if (status.EndStop != 0 & status.LeftEndStop != 0)
+        {
+            error = new DriveError(DriveErrorCode.EndStopHit, "Left End-stop detected.", "Jog away from the left limit.");
+            return true;
+        }
+        
+        if (status.EndStop != 0 & status.RightEndStop != 0 )
+        {
+            error = new DriveError(DriveErrorCode.EndStopHit, "Right End-stop detected.", "Jog away from the right limit.");
+            return true;
+        }  
 
         error = new DriveError(DriveErrorCode.None, string.Empty, string.Empty);
         return false;
@@ -786,7 +845,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 _lastFaultTimes[idx] = now;
             }
 
-            _logger.LogError("Slave {Slave} fault: {Error} status={Status:X}", slave, error, DriveStateFormatter.ToBitMask(status));
+            _logger.LogError("Slave {Slave} fault: {Error} status: {status}", slave, error, DriveStateFormatter.ToHexString(status));
             Faulted?.Invoke(this, new SoemFaultEvent(slave, status, error, health));
         }
         catch (Exception ex)
@@ -802,7 +861,8 @@ public sealed class EthercatDriveService : IEthercatDriveService
         Indexed,
         Enabled,
         Disabled,
-        Halt
+        Halt,
+        AckWithTimeout
     }
 
     private enum CommandState
@@ -885,9 +945,30 @@ public sealed class EthercatDriveService : IEthercatDriveService
             pdo.Execute = (byte)(Acked && RequiresAck ? 0 : 1);
         }
 
-        //control completions don't require Acked
         public CommandState Evaluate(SoemShim.DriveTxPDO status)
         {
+            // Special handling for AckWithTimeout - needs both ACK and full timeout duration
+            if (_completion == CommandCompletion.AckWithTimeout)
+            {
+                if (!Acked)
+                {
+                    // Still waiting for ACK
+                    if (_timeout > TimeSpan.Zero && _stopwatch.Elapsed > _timeout)
+                    {
+                        return CommandState.TimedOut; // Timed out without ACK
+                    }
+                    return CommandState.Pending;
+                }
+
+                // ACK received - now wait for timeout to complete
+                if (_timeout > TimeSpan.Zero && _stopwatch.Elapsed >= _timeout)
+                {
+                    return CommandState.Completed; // ACK + timeout both satisfied
+                }
+                return CommandState.Pending;
+            }
+
+            // General timeout check for all other completion types
             if (_timeout > TimeSpan.Zero && _stopwatch.Elapsed > _timeout)
             {
                 return CommandState.TimedOut;
@@ -896,7 +977,6 @@ public sealed class EthercatDriveService : IEthercatDriveService
             return _completion switch
             {
                 CommandCompletion.AckOnly => Acked ? CommandState.Completed : CommandState.Pending,
-                // motion/completion checks use status bits directly (don't require Acked)
                 CommandCompletion.PositionReached => status.PositionReached != 0 ? CommandState.Completed : CommandState.Pending,
                 CommandCompletion.Indexed => (status.EncoderValid != 0 && status.PositionReached != 0) ? CommandState.Completed : CommandState.Pending,
                 CommandCompletion.Enabled => (status.AmplifiersEnabled != 0 && status.MotorOn != 0) ? CommandState.Completed : CommandState.Pending,

@@ -1,6 +1,8 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using System;
+using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 
 [assembly: InternalsVisibleTo("XeryonEtherCAT.ConsoleHarness")]
@@ -10,9 +12,9 @@ namespace XeryonEtherCAT.Core.Internal.Soem;
 internal sealed class SoemClient : ISoemClient
 {
 
-    private readonly ILogger<SoemClient> _logger;
+    private readonly ILogger _logger;
 
-    public SoemClient(ILogger<SoemClient> logger)
+    public SoemClient(ILogger logger)
     {
         _logger = logger;
 
@@ -30,7 +32,7 @@ internal sealed class SoemClient : ISoemClient
             _ => LogLevel.Debug
         };
 
-        _logger.Log(logLevel, "[SOEM] {Message}", message);
+        _logger.Log(logLevel, "{Message}", message);
     }
 
     public IntPtr Initialize(string iface)
@@ -58,6 +60,16 @@ internal sealed class SoemClient : ISoemClient
     {
         try
         {
+            /*
+            Note: passing null for the outputs/ inputs buffers is safe and intentional in this architecture.
+               
+            Outputs (RxPDO):
+                •	If outputs == NULL → skips memset/ memcpy, leaves g->outputs as-is (already filled by soem_write_rxpdo).
+                •	Calls ecx_send_processdata(...) which uses the internal g->outputs buffer.
+            Inputs (TxPDO):
+                •	If inputs == NULL → skips the memcpy(inputs, g->inputs, ...).
+                •	The data is still received into the internal g->inputs buffer and can be read later via soem_read_txpdo.
+            */
             return SoemShim.soem_exchange_process_data(handle, null!, 0, null!, 0, timeoutUs);
         }
         catch (Exception ex)
@@ -68,12 +80,11 @@ internal sealed class SoemClient : ISoemClient
             if (TryRecover(handle, timeoutUs / 1000) == 0)
             {
                 _logger.LogInformation("Recovery successful after cable disconnection.");
-                return -1; // Indicate recovery mode
+                return -1;
             }
             else
-            {
-                _logger.LogError("Recovery failed. Manual intervention required.");
-                throw; // Re-throw if recovery fails
+            {               
+                throw;
             }
         }
     }

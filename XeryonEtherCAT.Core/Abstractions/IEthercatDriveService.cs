@@ -66,4 +66,9 @@ public interface IEthercatDriveService : IAsyncDisposable
     /// Raised when a drive enters a faulted state.
     /// </summary>
     event EventHandler<SoemFaultEvent> Faulted;
+
+    /// <summary>
+    /// Raised when drive status bits or position changes during command execution.
+    /// </summary>
+    event EventHandler<DriveStatusChangeEvent>? StatusChanged;
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
+using XeryonEtherCAT.Core.Models; // added to forward to formatter
 
 namespace XeryonEtherCAT.Core.Internal.Soem;
 
