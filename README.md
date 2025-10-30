@@ -44,6 +44,82 @@ dotnet run --project XeryonEtherCAT.App
 
 The Avalonia app boots the `EthercatDriveService` against the in-process simulation backend, rendering a live dashboard with per-slave status, position feedback, and common motion controls (enable/disable, DPOS, SCAN, INDX, HALT, STOP, RSET). Once the native shim is deployed the same UI can drive real hardware by swapping the simulated client with the default SOEM client.
 
+### Real-time telemetry & logging
+
+* Drive status updates are now streamed directly from the `StatusChanged` event; the dashboard updates the position and status mask for each slave as soon as a PDO changes.
+* A dedicated event pane captures the last 200 status or fault transitions in chronological order.
+* All logs produced by the core services are replayed inside the UI and can optionally be mirrored to a secondary Windows console window by toggling **Mirror to console**. The mirror uses `AllocConsole`/`FreeConsole`, demonstrating how to surface diagnostics in a detachable window.
+* Faults automatically surface in both the event pane and the log stream, helping with rapid recovery.
+
+### MQTT bridge
+
+Both the console harness and the dashboard can host an optional MQTT bridge that relays drive telemetry to external clients and accepts high-level commands. Configure the broker host/port in the UI or via the new console menu option.
+
+Topics follow the pattern (default `TopicRoot` is `xeryon/ethercat`):
+
+* Status snapshots – `xeryon/ethercat/slaves/<slaveId>/status`
+
+  ```json
+  {
+    "slave": 1,
+    "timestamp": "2024-05-04T18:32:10.123Z",
+    "command": "DPOS",
+    "position": 120000,
+    "positionChange": 1024,
+    "current": { "actualPosition": 120000, "amplifiersEnabled": 1, ... },
+    "previous": { ... }
+  }
+  ```
+
+* Faults – `xeryon/ethercat/slaves/<slaveId>/faults`
+
+  ```json
+  {
+    "slave": 1,
+    "timestamp": "2024-05-04T18:35:02.441Z",
+    "error": { "code": "PositionFail", "message": "Position error", "recovery": "Reset drive" },
+    "status": { "actualPosition": 120000, ... }
+  }
+  ```
+
+* Command ingress – `xeryon/ethercat/slaves/<slaveId>/commands`
+
+  ```json
+  {
+    "command": "moveAbsolute",
+    "targetPosition": 250000,
+    "velocity": 40000,
+    "acceleration": 1500,
+    "deceleration": 1500,
+    "settleTimeoutSeconds": 5
+  }
+  ```
+
+* Command acknowledgements – `xeryon/ethercat/slaves/<slaveId>/commands/ack`
+
+  ```json
+  {
+    "slave": 1,
+    "command": "moveAbsolute",
+    "success": true,
+    "timestamp": "2024-05-04T18:35:12.021Z"
+  }
+  ```
+
+Supported command keywords:
+
+* `enable` (`{"command":"enable","enable":true}`)
+* `reset`
+* `halt`
+* `stop`
+* `moveAbsolute`
+* `jog` (`direction` -1/0/1 plus optional `velocity`, `acceleration`, `deceleration`)
+* `index` (`direction` 0/1)
+
+Each command is executed through the high-level service API and publishes an acknowledgement message regardless of success, including the error text when something fails.
+
+Use the console harness' menu option **11) Toggle MQTT bridge** or the Avalonia UI controls to start/stop the bridge. Once connected all status/fault events are relayed while the application continues to operate normally.
+
 ## Working with `IEthercatDriveService`
 
 ```csharp
@@ -100,6 +176,10 @@ Faults raise a `SoemFaultEvent` that contains the offending slave, the raw statu
 `SimulatedSoemClient` implements `ISoemClient` and mimics the SOEM shim so that command packing, status decoding, and the dashboard can be exercised without real hardware. It understands the same command keywords and toggles the ExecuteAck/PositionReached bits to emulate drive behaviour.
 
 Switch between the simulation and the native shim by supplying a different `ISoemClient` instance to `EthercatDriveService`.
+
+## Lean Linux build of `soemshim`
+
+The `native/soemshim-linux` folder contains a trimmed CMake build that targets lightweight Docker containers. It depends on SOEM headers/libraries plus `libpcap` (the Linux counterpart to Npcap). See the included README for dependency notes, build commands, and a sample Dockerfile snippet.
 
 ## License
 

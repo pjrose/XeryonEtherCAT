@@ -1,9 +1,10 @@
-using System.Net.NetworkInformation;
 using Microsoft.Extensions.Logging;
 using XeryonEtherCAT.Core.Internal.Soem;
 using XeryonEtherCAT.Core.Models;
 using XeryonEtherCAT.Core.Options;
 using XeryonEtherCAT.Core.Services;
+using XeryonEtherCAT.Core.Utilities;
+using XeryonEtherCAT.Integrations.Mqtt;
 
 public class Program
 {
@@ -33,15 +34,34 @@ internal sealed class Harness : IAsyncDisposable
 
     private readonly EthercatDriveOptions _options = new();
     private readonly ISoemClient _soemClient;
+    private readonly AsyncEventQueue<ConsoleMessage> _eventQueue;
+    private readonly EthercatMqttBridgeOptions _mqttOptions = new();
 
     private EthercatDriveService? _service;
     private string? _interfaceName;
+    private EthercatMqttBridge? _mqttBridge;
 
     public Harness(ILoggerFactory loggerFactory)
     {
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger("Harness");
         _soemClient = new SoemClient(loggerFactory.CreateLogger("SoemClient"));
+        _eventQueue = new AsyncEventQueue<ConsoleMessage>(message =>
+        {
+            if (message.Color is { } color)
+            {
+                var original = Console.ForegroundColor;
+                Console.ForegroundColor = color;
+                Console.WriteLine(message.Message);
+                Console.ForegroundColor = original;
+            }
+            else
+            {
+                Console.WriteLine(message.Message);
+            }
+
+            return ValueTask.CompletedTask;
+        });
     }
 
     public async Task RunAsync()
@@ -88,6 +108,9 @@ internal sealed class Harness : IAsyncDisposable
                     case "10":
                         await RunRecoveryWorkflowAsync().ConfigureAwait(false);
                         break;
+                    case "11":
+                        await ToggleMqttBridgeAsync().ConfigureAwait(false);
+                        break;
                     case "0":
                         exit = true;
                         break;
@@ -115,6 +138,7 @@ internal sealed class Harness : IAsyncDisposable
     {
         await ShutdownAsync().ConfigureAwait(false);
         _soemClient.Dispose();
+        await _eventQueue.DisposeAsync().ConfigureAwait(false);
     }
 
     private void PrintMenu()
@@ -130,6 +154,7 @@ internal sealed class Harness : IAsyncDisposable
         Console.WriteLine(" 8) Send raw command frame");
         Console.WriteLine(" 9) Demonstrate command queueing");
         Console.WriteLine("10) Reset / homing / recovery workflow");
+        Console.WriteLine("11) Toggle MQTT bridge");
         Console.WriteLine(" 0) Exit");
     }
 
@@ -173,11 +198,7 @@ internal sealed class Harness : IAsyncDisposable
         });
         _service = new EthercatDriveService(_options, _serviceLoggerFactory.CreateLogger<EthercatDriveService>(), _soemClient);
         _service.Faulted += OnFaulted;
-        _service.StatusChanged += (sender, e) =>
-        {
-            //commented out because service prints to console directly
-            //Console.WriteLine(e.ToString()); 
-        };
+        _service.StatusChanged += OnStatusChanged;
 
         await _service.InitializeAsync(iface, CancellationToken.None).ConfigureAwait(false);
         _interfaceName = iface;
@@ -194,15 +215,78 @@ internal sealed class Harness : IAsyncDisposable
 
         await _service.DisposeAsync().ConfigureAwait(false);
         _service.Faulted -= OnFaulted;
+        _service.StatusChanged -= OnStatusChanged;
         _service = null;
         _interfaceName = null;
         Console.WriteLine("Service shut down.");
+
+        if (_mqttBridge is not null)
+        {
+            await _mqttBridge.DisposeAsync().ConfigureAwait(false);
+            _mqttBridge = null;
+        }
     }
 
     private void OnFaulted(object? sender, SoemFaultEvent e)
     {
         var status = DriveStateFormatter.DriveTxPdoToHexString(e.Status);
         _logger.LogError("Fault reported for slave {Slave}: {Error}, txPDO: {rawHex}", e.Slave, e.Error, status);
+        var message = $"Fault detected on slave {e.Slave}: {e.Error.Code} - {e.Error.Message} (tx={status})";
+        _eventQueue.TryEnqueue(new ConsoleMessage(message, ConsoleColor.Red));
+    }
+
+    private void OnStatusChanged(object? sender, DriveStatusChangeEvent e)
+    {
+        _eventQueue.TryEnqueue(new ConsoleMessage(e.ToString(), ConsoleColor.DarkGray));
+    }
+
+    private readonly record struct ConsoleMessage(string Message, ConsoleColor? Color);
+
+    private async Task ToggleMqttBridgeAsync()
+    {
+        if (_service is null)
+        {
+            Console.WriteLine("Initialize the EtherCAT service before starting the MQTT bridge.");
+            return;
+        }
+
+        if (_mqttBridge is null)
+        {
+            Console.Write($"MQTT host (default {_mqttOptions.BrokerHost}): ");
+            var hostInput = (Console.ReadLine() ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(hostInput))
+            {
+                _mqttOptions.BrokerHost = hostInput;
+            }
+
+            Console.Write($"MQTT port (default {_mqttOptions.BrokerPort}): ");
+            if (int.TryParse(Console.ReadLine(), out var port) && port > 0)
+            {
+                _mqttOptions.BrokerPort = port;
+            }
+
+            var logger = (_serviceLoggerFactory ?? _loggerFactory).CreateLogger<EthercatMqttBridge>();
+            var bridge = new EthercatMqttBridge(_service, _mqttOptions, logger);
+
+            try
+            {
+                await bridge.StartAsync(CancellationToken.None).ConfigureAwait(false);
+                _mqttBridge = bridge;
+                Console.WriteLine($"MQTT bridge connected to {_mqttOptions.BrokerHost}:{_mqttOptions.BrokerPort}.");
+            }
+            catch (Exception ex)
+            {
+                await bridge.DisposeAsync().ConfigureAwait(false);
+                _logger.LogError(ex, "Failed to connect MQTT bridge");
+            }
+        }
+        else
+        {
+            await _mqttBridge.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await _mqttBridge.DisposeAsync().ConfigureAwait(false);
+            _mqttBridge = null;
+            Console.WriteLine("MQTT bridge disconnected.");
+        }
     }
 
     private async Task ShowStatusAsync()

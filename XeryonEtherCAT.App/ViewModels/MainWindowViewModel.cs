@@ -4,35 +4,86 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using XeryonEtherCAT.App.Commands;
+using XeryonEtherCAT.App.Logging;
+using XeryonEtherCAT.App.Services;
 using XeryonEtherCAT.Core.Abstractions;
 using XeryonEtherCAT.Core.Internal.Soem;
 using XeryonEtherCAT.Core.Models;
 using XeryonEtherCAT.Core.Options;
 using XeryonEtherCAT.Core.Services;
+using XeryonEtherCAT.Core.Utilities;
+using XeryonEtherCAT.Integrations.Mqtt;
 
 namespace XeryonEtherCAT.App.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
+    private const int MaxLogEntries = 500;
+    private const int MaxEventEntries = 200;
+
     private readonly IEthercatDriveService _service;
     private readonly DispatcherTimer _pollTimer;
     private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly AsyncEventQueue<DriveStatusChangeEvent> _statusQueue;
+    private readonly AsyncEventQueue<SoemFaultEvent> _faultQueue;
+    private readonly AsyncEventQueue<LogEntryViewModel> _logQueue;
+    private readonly LogConsoleService _consoleService = new();
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _uiLogger;
+    private EthercatMqttBridge? _mqttBridge;
     private bool _initialized;
     private string _connectionStatus = "Initializing";
     private string _cycleMetrics = string.Empty;
     private int _selectedSlave = 1;
     private int _targetPosition = 10000;
     private int _jogVelocity = 20000;
+    private bool _showConsoleLogs;
+    private string _mqttHost = "localhost";
+    private int _mqttPort = 1883;
+    private bool _mqttConnected;
 
     public MainWindowViewModel()
     {
+        _statusQueue = new AsyncEventQueue<DriveStatusChangeEvent>(change =>
+        {
+            Dispatcher.UIThread.Post(() => ProcessStatusChange(change));
+            return ValueTask.CompletedTask;
+        });
+
+        _faultQueue = new AsyncEventQueue<SoemFaultEvent>(fault =>
+        {
+            Dispatcher.UIThread.Post(() => ProcessFault(fault));
+            return ValueTask.CompletedTask;
+        });
+
+        _logQueue = new AsyncEventQueue<LogEntryViewModel>(entry =>
+        {
+            Dispatcher.UIThread.Post(() => ProcessLogEntry(entry));
+            return ValueTask.CompletedTask;
+        });
+
+        var relayProvider = new RelayLoggerProvider(entry =>
+        {
+            if (!_logQueue.TryEnqueue(entry))
+            {
+                ProcessLogEntry(entry);
+            }
+        }, "Dashboard");
+
+        _loggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.SetMinimumLevel(LogLevel.Debug);
+            builder.AddProvider(relayProvider);
+        });
+        _uiLogger = _loggerFactory.CreateLogger<MainWindowViewModel>();
+
         _service = new EthercatDriveService(new EthercatDriveOptions
         {
             CyclePeriod = TimeSpan.FromMilliseconds(5),
             EnableCycleTraceLogging = false
-        }, NullLogger<EthercatDriveService>.Instance, new SimulatedSoemClient());
+        }, _loggerFactory.CreateLogger<EthercatDriveService>(), new SimulatedSoemClient());
 
         _pollTimer = new DispatcherTimer
         {
@@ -50,9 +101,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         HaltCommand = new AsyncRelayCommand(() => _service.HaltAsync(SelectedSlave, _lifetimeCts.Token));
         StopCommand = new AsyncRelayCommand(() => _service.StopAsync(SelectedSlave, _lifetimeCts.Token));
         ResetCommand = new AsyncRelayCommand(() => _service.ResetAsync(SelectedSlave, _lifetimeCts.Token));
+        ClearLogCommand = new RelayCommand(() => Logs.Clear());
+        ToggleMqttCommand = new AsyncRelayCommand(ToggleMqttAsync);
     }
 
     public ObservableCollection<DriveStatusViewModel> Drives { get; } = new();
+
+    public ObservableCollection<DriveEventViewModel> StatusEvents { get; } = new();
+
+    public ObservableCollection<LogEntryViewModel> Logs { get; } = new();
 
     public string ConnectionStatus
     {
@@ -104,6 +161,70 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     public AsyncRelayCommand ResetCommand { get; }
 
+    public RelayCommand ClearLogCommand { get; }
+
+    public AsyncRelayCommand ToggleMqttCommand { get; }
+
+    public bool ShowConsoleLogs
+    {
+        get => _showConsoleLogs;
+        set
+        {
+            if (SetProperty(ref _showConsoleLogs, value))
+            {
+                if (value)
+                {
+                    _consoleService.EnsureConsole();
+                }
+                else
+                {
+                    _consoleService.ReleaseConsole();
+                }
+            }
+        }
+    }
+
+    public string MqttHost
+    {
+        get => _mqttHost;
+        set
+        {
+            if (SetProperty(ref _mqttHost, value))
+            {
+                OnPropertyChanged(nameof(MqttStatus));
+            }
+        }
+    }
+
+    public int MqttPort
+    {
+        get => _mqttPort;
+        set
+        {
+            if (SetProperty(ref _mqttPort, value))
+            {
+                OnPropertyChanged(nameof(MqttStatus));
+            }
+        }
+    }
+
+    public bool MqttConnected
+    {
+        get => _mqttConnected;
+        private set
+        {
+            if (SetProperty(ref _mqttConnected, value))
+            {
+                OnPropertyChanged(nameof(MqttStatus));
+                OnPropertyChanged(nameof(MqttButtonText));
+            }
+        }
+    }
+
+    public string MqttStatus => MqttConnected ? $"MQTT connected to {MqttHost}:{MqttPort}" : "MQTT offline";
+
+    public string MqttButtonText => MqttConnected ? "Disconnect MQTT" : "Connect MQTT";
+
     public async Task InitializeAsync()
     {
         if (_initialized)
@@ -127,6 +248,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         });
 
         _service.Faulted += OnFaulted;
+        _service.StatusChanged += OnStatusChanged;
         _pollTimer.Start();
         _initialized = true;
     }
@@ -165,12 +287,97 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         });
     }
 
+    private void OnStatusChanged(object? sender, DriveStatusChangeEvent e)
+    {
+        _statusQueue.TryEnqueue(e);
+    }
+
     private void OnFaulted(object? sender, SoemFaultEvent e)
     {
-        Dispatcher.UIThread.Post(() =>
+        _faultQueue.TryEnqueue(e);
+    }
+
+    private void ProcessStatusChange(DriveStatusChangeEvent change)
+    {
+        var index = change.Slave - 1;
+        if (index >= 0 && index < Drives.Count)
         {
-            ConnectionStatus = $"Fault on slave {e.Slave}: {e.Error.Code}";
-        });
+            Drives[index].Update(change.CurrentStatus);
+        }
+
+        StatusEvents.Insert(0, new DriveEventViewModel(change));
+        while (StatusEvents.Count > MaxEventEntries)
+        {
+            StatusEvents.RemoveAt(StatusEvents.Count - 1);
+        }
+    }
+
+    private void ProcessFault(SoemFaultEvent fault)
+    {
+        ConnectionStatus = $"Fault on slave {fault.Slave}: {fault.Error.Code}";
+        StatusEvents.Insert(0, new DriveEventViewModel(new DriveStatusChangeEvent(fault.Slave, DateTimeOffset.UtcNow, fault.Status, fault.Status, 0u, fault.Error.Code.ToString())));
+        while (StatusEvents.Count > MaxEventEntries)
+        {
+            StatusEvents.RemoveAt(StatusEvents.Count - 1);
+        }
+        _uiLogger.LogWarning("Fault on slave {Slave}: {Error}", fault.Slave, fault.Error);
+    }
+
+    private void ProcessLogEntry(LogEntryViewModel entry)
+    {
+        Logs.Insert(0, entry);
+        while (Logs.Count > MaxLogEntries)
+        {
+            Logs.RemoveAt(Logs.Count - 1);
+        }
+
+        if (ShowConsoleLogs)
+        {
+            Console.WriteLine(entry.ToString());
+        }
+    }
+
+    private async Task ToggleMqttAsync()
+    {
+        if (_mqttBridge is null)
+        {
+            var options = new EthercatMqttBridgeOptions
+            {
+                BrokerHost = MqttHost,
+                BrokerPort = MqttPort
+            };
+
+            var bridgeLogger = _loggerFactory.CreateLogger<EthercatMqttBridge>();
+            var bridge = new EthercatMqttBridge(_service, options, bridgeLogger);
+
+            try
+            {
+                await bridge.StartAsync(_lifetimeCts.Token).ConfigureAwait(false);
+                _mqttBridge = bridge;
+                MqttConnected = true;
+                _uiLogger.LogInformation("MQTT bridge connected to {Host}:{Port}", MqttHost, MqttPort);
+            }
+            catch (Exception ex)
+            {
+                await bridge.DisposeAsync().ConfigureAwait(false);
+                _uiLogger.LogError(ex, "Failed to connect MQTT bridge to {Host}:{Port}", MqttHost, MqttPort);
+                _logQueue.TryEnqueue(new LogEntryViewModel(DateTimeOffset.UtcNow, LogLevel.Error, "MQTT", $"Failed to connect to {MqttHost}:{MqttPort}: {ex.Message}", ex));
+            }
+        }
+        else
+        {
+            try
+            {
+                await _mqttBridge.StopAsync(_lifetimeCts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                await _mqttBridge.DisposeAsync().ConfigureAwait(false);
+                _mqttBridge = null;
+                MqttConnected = false;
+                _uiLogger.LogInformation("MQTT bridge disconnected");
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -178,7 +385,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         _pollTimer.Stop();
         _lifetimeCts.Cancel();
         _service.Faulted -= OnFaulted;
+        _service.StatusChanged -= OnStatusChanged;
         await _service.DisposeAsync().ConfigureAwait(false);
         _lifetimeCts.Dispose();
+        await _statusQueue.DisposeAsync().ConfigureAwait(false);
+        await _faultQueue.DisposeAsync().ConfigureAwait(false);
+        await _logQueue.DisposeAsync().ConfigureAwait(false);
+        if (_mqttBridge is not null)
+        {
+            await _mqttBridge.DisposeAsync().ConfigureAwait(false);
+        }
+        _consoleService.Dispose();
+        _loggerFactory.Dispose();
     }
 }

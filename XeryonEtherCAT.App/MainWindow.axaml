@@ -41,22 +41,75 @@
             </StackPanel>
         </Border>
 
-        <Border Grid.Row="2" Background="#1B2226" CornerRadius="6" Padding="12">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                <ItemsControl ItemsSource="{Binding Drives}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:DriveStatusViewModel">
-                            <Border BorderBrush="#2C3E50" BorderThickness="0,0,0,1" Padding="8">
-                                <Grid ColumnDefinitions="60,120,*">
-                                    <TextBlock Text="{Binding Slave}" FontWeight="Bold" />
-                                    <TextBlock Grid.Column="1" Text="{Binding Position}" />
-                                    <TextBlock Grid.Column="2" Text="{Binding StatusText}" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
-        </Border>
+        <Grid Grid.Row="2" ColumnDefinitions="2*,*" ColumnSpacing="12">
+            <Border Background="#1B2226" CornerRadius="6" Padding="12">
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Drives}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DriveStatusViewModel">
+                                <Border BorderBrush="#2C3E50" BorderThickness="0,0,0,1" Padding="8">
+                                    <Grid ColumnDefinitions="60,120,*">
+                                        <TextBlock Text="{Binding Slave}" FontWeight="Bold" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Position}" />
+                                        <TextBlock Grid.Column="2" Text="{Binding StatusText}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto,Auto,*" RowSpacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Status events" FontWeight="Bold" VerticalAlignment="Center" />
+                </StackPanel>
+                <Border Grid.Row="1" Background="#10161A" CornerRadius="6" Padding="8">
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding StatusEvents}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:DriveEventViewModel">
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,6" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+
+                <Border Grid.Row="2" Background="#10161A" CornerRadius="6" Padding="8">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="MQTT bridge" FontWeight="Bold" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="Host" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding MqttHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="140" />
+                            <TextBlock Text="Port" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding MqttPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="80" />
+                            <Button Content="{Binding MqttButtonText}" Command="{Binding ToggleMqttCommand}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding MqttStatus}" FontStyle="Italic" />
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Logs" FontWeight="Bold" VerticalAlignment="Center" />
+                    <CheckBox Content="Mirror to console" IsChecked="{Binding ShowConsoleLogs}" VerticalAlignment="Center" />
+                    <Button Content="Clear" Command="{Binding ClearLogCommand}" />
+                </StackPanel>
+
+                <Border Grid.Row="4" Background="#10161A" CornerRadius="6" Padding="8">
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Logs}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:LogEntryViewModel">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding}" TextWrapping="Wrap" FontFamily="Consolas" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+        </Grid>
     </Grid>
 </Window>
