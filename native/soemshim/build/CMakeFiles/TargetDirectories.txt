@@ -1,0 +1,3 @@
+C:/Users/LattePanda/source/repos/XeryonEtherCAT/native/soemshim/build/CMakeFiles/soemshim.dir
+C:/Users/LattePanda/source/repos/XeryonEtherCAT/native/soemshim/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/LattePanda/source/repos/XeryonEtherCAT/native/soemshim/build/CMakeFiles/ZERO_CHECK.dir
