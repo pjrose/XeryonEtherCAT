@@ -281,7 +281,7 @@ SOEMSHIM_EXPORT int soem_exchange_process_data(
         // else: leave IOmap outputs as-is (e.g., set by soem_write_rxpdo)
     }
 
-    int wkc = ecx_send_processdata(&h->context);
+    int wkc = ecx_send_processdata(&h->context); //Receive processdata from slaves. Group number is zero (default).
     int expected = (int)(g->outputsWKC * 2 + g->inputsWKC);
 
     if (wkc < 0) {
