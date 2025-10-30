@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    container_name: xeryon-mqtt-broker
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_config:/mosquitto/config
+      - mosquitto_log:/mosquitto/log
+
+  app:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    container_name: xeryon-ethercat-app
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: ["dotnet", "run", "--project", "XeryonEtherCAT.ConsoleHarness"]
+    stdin_open: true
+    tty: true
+    environment:
+      MQTT__Host: broker
+      MQTT__Port: "1883"
+    depends_on:
+      - broker
+
+volumes:
+  mosquitto_data:
+  mosquitto_config:
+  mosquitto_log:

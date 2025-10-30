@@ -18,9 +18,11 @@
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\XeryonEtherCAT.Core\XeryonEtherCAT.Core.csproj" />
+    <ProjectReference Include="..\XeryonEtherCAT.Integrations.Mqtt\XeryonEtherCAT.Integrations.Mqtt.csproj" />
   </ItemGroup>
 </Project>
