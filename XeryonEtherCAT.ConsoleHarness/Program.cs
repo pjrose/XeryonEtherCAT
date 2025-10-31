@@ -6,6 +6,7 @@ using XeryonEtherCAT.Core.Options;
 using XeryonEtherCAT.Core.Services;
 using XeryonEtherCAT.Core.Utilities;
 using XeryonEtherCAT.Integrations.Mqtt;
+using XeryonEtherCAT.Integrations.Grpc;
 
 public class Program
 {
@@ -39,11 +40,13 @@ internal sealed class Harness : IAsyncDisposable
     private readonly ISoemClient _soemClient;
     private readonly AsyncEventQueue<ConsoleMessage> _eventQueue;
     private readonly EthercatMqttBridgeOptions _mqttOptions = new();
+    private readonly EthercatGrpcServerOptions _grpcOptions = new();
 
     private readonly ConsoleWriter _consoleWriter;
     private EthercatDriveService? _service;
     private string? _interfaceName;
     private EthercatMqttBridge? _mqttBridge;
+    private EthercatGrpcServiceHost? _grpcHost;
 
     public Harness(ILoggerFactory loggerFactory, ConsoleWriter consoleWriter)
     {
@@ -116,6 +119,9 @@ internal sealed class Harness : IAsyncDisposable
                     case "11":
                         await ToggleMqttBridgeAsync().ConfigureAwait(false);
                         break;
+                    case "12":
+                        await ToggleGrpcServerAsync().ConfigureAwait(false);
+                        break;
                     case "0":
                         exit = true;
                         break;
@@ -148,19 +154,20 @@ internal sealed class Harness : IAsyncDisposable
 
     private void PrintMenu()
     {
-        _consoleWriter.WriteLine("==== Xeryon EtherCAT Service Harness ====");
-        _consoleWriter.WriteLine(" 1) List network adapters");
-        _consoleWriter.WriteLine(" 2) Initialize EtherCAT session");
-        _consoleWriter.WriteLine(" 3) Shutdown session");
-        _consoleWriter.WriteLine(" 4) Query slave devices / status snapshot");
-        _consoleWriter.WriteLine(" 5) Run process data soak test");
-        _consoleWriter.WriteLine(" 6) Issue Reset and Enable");
-        _consoleWriter.WriteLine(" 7) Cable disconnect / re-init drill");
-        _consoleWriter.WriteLine(" 8) Send raw command frame");
-        _consoleWriter.WriteLine(" 9) Demonstrate command queueing");
-        _consoleWriter.WriteLine("10) Reset / homing / recovery workflow");
-        _consoleWriter.WriteLine("11) Toggle MQTT bridge");
-        _consoleWriter.WriteLine(" 0) Exit");
+        Console.WriteLine("==== Xeryon EtherCAT Service Harness ====");
+        Console.WriteLine(" 1) List network adapters");
+        Console.WriteLine(" 2) Initialize EtherCAT session");
+        Console.WriteLine(" 3) Shutdown session");
+        Console.WriteLine(" 4) Query slave devices / status snapshot");
+        Console.WriteLine(" 5) Run process data soak test");
+        Console.WriteLine(" 6) Issue Reset and Enable");
+        Console.WriteLine(" 7) Cable disconnect / re-init drill");
+        Console.WriteLine(" 8) Send raw command frame");
+        Console.WriteLine(" 9) Demonstrate command queueing");
+        Console.WriteLine("10) Reset / homing / recovery workflow");
+        Console.WriteLine("11) Toggle MQTT bridge");
+        Console.WriteLine("12) Toggle gRPC server");
+        Console.WriteLine(" 0) Exit");
     }
 
     private async Task InitializeAsync()
@@ -232,6 +239,12 @@ internal sealed class Harness : IAsyncDisposable
             await _mqttBridge.DisposeAsync().ConfigureAwait(false);
             _mqttBridge = null;
         }
+
+        if (_grpcHost is not null)
+        {
+            await _grpcHost.DisposeAsync().ConfigureAwait(false);
+            _grpcHost = null;
+        }
     }
 
     private void OnFaulted(object? sender, SoemFaultEvent e)
@@ -293,6 +306,60 @@ internal sealed class Harness : IAsyncDisposable
             await _mqttBridge.DisposeAsync().ConfigureAwait(false);
             _mqttBridge = null;
             _consoleWriter.WriteLine("MQTT bridge disconnected.");
+        }
+    }
+
+    private async Task ToggleGrpcServerAsync()
+    {
+        if (_service is null)
+        {
+            Console.WriteLine("Initialize the EtherCAT service before starting the gRPC server.");
+            return;
+        }
+
+        if (_grpcHost is null)
+        {
+            Console.Write($"gRPC host (default {_grpcOptions.Host}): ");
+            var hostInput = (Console.ReadLine() ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(hostInput))
+            {
+                _grpcOptions.Host = hostInput;
+            }
+
+            Console.Write($"gRPC port (default {_grpcOptions.Port}): ");
+            if (int.TryParse(Console.ReadLine(), out var port) && port > 0)
+            {
+                _grpcOptions.Port = port;
+            }
+
+            Console.Write($"Telemetry buffer size (default {_grpcOptions.TelemetryBufferSize}): ");
+            if (int.TryParse(Console.ReadLine(), out var bufferSize) && bufferSize > 0)
+            {
+                _grpcOptions.TelemetryBufferSize = bufferSize;
+            }
+
+            var factory = _serviceLoggerFactory ?? _loggerFactory;
+            var logger = factory.CreateLogger<EthercatGrpcServiceHost>();
+            var host = new EthercatGrpcServiceHost(_service, _grpcOptions, factory, logger);
+
+            try
+            {
+                await host.StartAsync(CancellationToken.None).ConfigureAwait(false);
+                _grpcHost = host;
+                Console.WriteLine($"gRPC server listening on {_grpcOptions.Host}:{_grpcOptions.Port}.");
+            }
+            catch (Exception ex)
+            {
+                await host.DisposeAsync().ConfigureAwait(false);
+                _logger.LogError(ex, "Failed to start gRPC server");
+            }
+        }
+        else
+        {
+            await _grpcHost.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await _grpcHost.DisposeAsync().ConfigureAwait(false);
+            _grpcHost = null;
+            Console.WriteLine("gRPC server stopped.");
         }
     }
 

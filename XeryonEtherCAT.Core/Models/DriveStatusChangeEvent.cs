@@ -15,7 +15,9 @@ public sealed class DriveStatusChangeEvent
         SoemShim.DriveTxPDO currentStatus,
         SoemShim.DriveTxPDO previousStatus,
         uint changedBitsMask,
-        string? activeCommand)
+        string? activeCommand,
+        long monotonicTimestampTicks = 0,
+        long sequence = 0)
     {
         Slave = slave;
         Timestamp = timestamp;
@@ -23,6 +25,8 @@ public sealed class DriveStatusChangeEvent
         PreviousStatus = previousStatus;
         ChangedBitsMask = changedBitsMask;
         ActiveCommand = activeCommand;
+        MonotonicTimestampTicks = monotonicTimestampTicks;
+        Sequence = sequence;
     }
 
     public int Slave { get; }
@@ -31,6 +35,8 @@ public sealed class DriveStatusChangeEvent
     public SoemShim.DriveTxPDO PreviousStatus { get; }
     public uint ChangedBitsMask { get; }
     public string? ActiveCommand { get; }
+    public long MonotonicTimestampTicks { get; }
+    public long Sequence { get; }
 
     public int PositionChange => CurrentStatus.ActualPosition - PreviousStatus.ActualPosition;
 

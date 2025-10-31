@@ -1,8 +1,7 @@
 using System;
+using System.ComponentModel;
 using System.Threading.Tasks;
-using Avalonia.Controls;
-using Avalonia.Markup.Xaml;
-using Avalonia.Interactivity;
+using System.Windows;
 using XeryonEtherCAT.App.ViewModels;
 
 namespace XeryonEtherCAT.App;
@@ -12,16 +11,11 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Opened += OnOpened;
+        Loaded += OnLoaded;
         Closing += OnClosing;
     }
 
-    private void InitializeComponent()
-    {
-        AvaloniaXamlLoader.Load(this);
-    }
-
-    private async void OnOpened(object? sender, EventArgs e)
+    private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel vm)
         {
@@ -29,7 +23,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnClosing(object? sender, WindowClosingEventArgs e)
+    private async void OnClosing(object? sender, CancelEventArgs e)
     {
         if (DataContext is MainWindowViewModel vm)
         {
