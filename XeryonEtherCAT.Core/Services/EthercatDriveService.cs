@@ -12,6 +12,7 @@ using XeryonEtherCAT.Core.Abstractions;
 using XeryonEtherCAT.Core.Internal.Soem;
 using XeryonEtherCAT.Core.Models;
 using XeryonEtherCAT.Core.Options;
+using XeryonEtherCAT.Core.Utilities;
 
 namespace XeryonEtherCAT.Core.Services;
 
@@ -50,6 +51,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
     private bool[] _stopLatch = Array.Empty<bool>();
     private SoemStatusSnapshot _snapshot = new(DateTimeOffset.UtcNow, new SoemHealthSnapshot(0, 0, 0, 0, 0, 0, 0), Array.Empty<SoemShim.DriveTxPDO>(), TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero);
     private int _wkcStrikes;
+    private long _telemetrySequence;
 
     public EthercatDriveService(EthercatDriveOptions? options = null, ILogger<EthercatDriveService>? logger = null, ISoemClient? soemClient = null)
     {
@@ -611,13 +613,17 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 if ((changedMask != 0 || positionChanged) && (command != null))
                 {
                     var timestamp = DateTimeOffset.UtcNow;
+                    var monotonicTicks = TelemetrySync.GetTimestampTicks();
+                    var sequence = Interlocked.Increment(ref _telemetrySequence);
                     var statusEvent = new DriveStatusChangeEvent(
                         slaveIndex,
                         timestamp,
                         tx,
                         previous,
                         changedMask,
-                        command?.Keyword);
+                        command?.Keyword,
+                        monotonicTicks,
+                        sequence);
 
                     // Log the change with millisecond precision
                     _logger.LogDebug("{StatusChange}", statusEvent.ToString());

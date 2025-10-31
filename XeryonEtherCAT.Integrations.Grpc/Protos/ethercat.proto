@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+option csharp_namespace = "XeryonEtherCAT.Integrations.Grpc";
+
+package ethercat;
+
+service EthercatControl {
+  rpc SubscribeTelemetry (TelemetrySubscriptionRequest) returns (stream TelemetryFrame);
+  rpc MoveAbsolute (MoveAbsoluteRequest) returns (CommandReply);
+  rpc Jog (JogRequest) returns (CommandReply);
+  rpc Index (IndexRequest) returns (CommandReply);
+  rpc Reset (DriveSelectionRequest) returns (CommandReply);
+  rpc Enable (EnableRequest) returns (CommandReply);
+  rpc Halt (DriveSelectionRequest) returns (CommandReply);
+  rpc Stop (DriveSelectionRequest) returns (CommandReply);
+}
+
+message TelemetrySubscriptionRequest {
+  repeated int32 slaves = 1;
+}
+
+message TelemetryFrame {
+  int32 slave = 1;
+  int64 timestamp_utc_ticks = 2;
+  int64 monotonic_ticks = 3;
+  int64 monotonic_frequency = 4;
+  string active_command = 5;
+  uint32 changed_bits = 6;
+  DriveStatusSnapshot current = 7;
+  DriveStatusSnapshot previous = 8;
+  uint64 sequence = 9;
+}
+
+message DriveStatusSnapshot {
+  int32 actual_position = 1;
+  bool amplifiers_enabled = 2;
+  bool end_stop = 3;
+  bool thermal_protection1 = 4;
+  bool thermal_protection2 = 5;
+  bool force_zero = 6;
+  bool motor_on = 7;
+  bool closed_loop = 8;
+  bool encoder_index = 9;
+  bool encoder_valid = 10;
+  bool searching_index = 11;
+  bool position_reached = 12;
+  bool error_compensation = 13;
+  bool encoder_error = 14;
+  bool scanning = 15;
+  bool left_end_stop = 16;
+  bool right_end_stop = 17;
+  bool error_limit = 18;
+  bool searching_optimal_frequency = 19;
+  bool safety_timeout = 20;
+  bool execute_ack = 21;
+  bool emergency_stop = 22;
+  bool position_fail = 23;
+  uint32 slot = 24;
+}
+
+message MoveAbsoluteRequest {
+  int32 slave = 1;
+  int32 target_position = 2;
+  int32 velocity = 3;
+  uint32 acceleration = 4;
+  uint32 deceleration = 5;
+  double settle_timeout_seconds = 6;
+}
+
+message JogRequest {
+  int32 slave = 1;
+  int32 direction = 2;
+  int32 velocity = 3;
+  uint32 acceleration = 4;
+  uint32 deceleration = 5;
+}
+
+message IndexRequest {
+  int32 slave = 1;
+  int32 direction = 2;
+  int32 velocity = 3;
+  uint32 acceleration = 4;
+  uint32 deceleration = 5;
+  double settle_timeout_seconds = 6;
+}
+
+message DriveSelectionRequest {
+  int32 slave = 1;
+}
+
+message EnableRequest {
+  int32 slave = 1;
+  bool enable = 2;
+}
+
+message CommandReply {
+  bool accepted = 1;
+  string message = 2;
+}

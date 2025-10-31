@@ -5,6 +5,7 @@ using XeryonEtherCAT.Core.Options;
 using XeryonEtherCAT.Core.Services;
 using XeryonEtherCAT.Core.Utilities;
 using XeryonEtherCAT.Integrations.Mqtt;
+using XeryonEtherCAT.Integrations.Grpc;
 
 public class Program
 {
@@ -36,10 +37,12 @@ internal sealed class Harness : IAsyncDisposable
     private readonly ISoemClient _soemClient;
     private readonly AsyncEventQueue<ConsoleMessage> _eventQueue;
     private readonly EthercatMqttBridgeOptions _mqttOptions = new();
+    private readonly EthercatGrpcServerOptions _grpcOptions = new();
 
     private EthercatDriveService? _service;
     private string? _interfaceName;
     private EthercatMqttBridge? _mqttBridge;
+    private EthercatGrpcServiceHost? _grpcHost;
 
     public Harness(ILoggerFactory loggerFactory)
     {
@@ -111,6 +114,9 @@ internal sealed class Harness : IAsyncDisposable
                     case "11":
                         await ToggleMqttBridgeAsync().ConfigureAwait(false);
                         break;
+                    case "12":
+                        await ToggleGrpcServerAsync().ConfigureAwait(false);
+                        break;
                     case "0":
                         exit = true;
                         break;
@@ -155,6 +161,7 @@ internal sealed class Harness : IAsyncDisposable
         Console.WriteLine(" 9) Demonstrate command queueing");
         Console.WriteLine("10) Reset / homing / recovery workflow");
         Console.WriteLine("11) Toggle MQTT bridge");
+        Console.WriteLine("12) Toggle gRPC server");
         Console.WriteLine(" 0) Exit");
     }
 
@@ -225,6 +232,12 @@ internal sealed class Harness : IAsyncDisposable
             await _mqttBridge.DisposeAsync().ConfigureAwait(false);
             _mqttBridge = null;
         }
+
+        if (_grpcHost is not null)
+        {
+            await _grpcHost.DisposeAsync().ConfigureAwait(false);
+            _grpcHost = null;
+        }
     }
 
     private void OnFaulted(object? sender, SoemFaultEvent e)
@@ -286,6 +299,60 @@ internal sealed class Harness : IAsyncDisposable
             await _mqttBridge.DisposeAsync().ConfigureAwait(false);
             _mqttBridge = null;
             Console.WriteLine("MQTT bridge disconnected.");
+        }
+    }
+
+    private async Task ToggleGrpcServerAsync()
+    {
+        if (_service is null)
+        {
+            Console.WriteLine("Initialize the EtherCAT service before starting the gRPC server.");
+            return;
+        }
+
+        if (_grpcHost is null)
+        {
+            Console.Write($"gRPC host (default {_grpcOptions.Host}): ");
+            var hostInput = (Console.ReadLine() ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(hostInput))
+            {
+                _grpcOptions.Host = hostInput;
+            }
+
+            Console.Write($"gRPC port (default {_grpcOptions.Port}): ");
+            if (int.TryParse(Console.ReadLine(), out var port) && port > 0)
+            {
+                _grpcOptions.Port = port;
+            }
+
+            Console.Write($"Telemetry buffer size (default {_grpcOptions.TelemetryBufferSize}): ");
+            if (int.TryParse(Console.ReadLine(), out var bufferSize) && bufferSize > 0)
+            {
+                _grpcOptions.TelemetryBufferSize = bufferSize;
+            }
+
+            var factory = _serviceLoggerFactory ?? _loggerFactory;
+            var logger = factory.CreateLogger<EthercatGrpcServiceHost>();
+            var host = new EthercatGrpcServiceHost(_service, _grpcOptions, factory, logger);
+
+            try
+            {
+                await host.StartAsync(CancellationToken.None).ConfigureAwait(false);
+                _grpcHost = host;
+                Console.WriteLine($"gRPC server listening on {_grpcOptions.Host}:{_grpcOptions.Port}.");
+            }
+            catch (Exception ex)
+            {
+                await host.DisposeAsync().ConfigureAwait(false);
+                _logger.LogError(ex, "Failed to start gRPC server");
+            }
+        }
+        else
+        {
+            await _grpcHost.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await _grpcHost.DisposeAsync().ConfigureAwait(false);
+            _grpcHost = null;
+            Console.WriteLine("gRPC server stopped.");
         }
     }
 

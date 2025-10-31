@@ -3,7 +3,8 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Avalonia.Threading;
+using System.Windows;
+using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using XeryonEtherCAT.App.Commands;
 using XeryonEtherCAT.App.Logging;
@@ -23,6 +24,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private const int MaxLogEntries = 500;
     private const int MaxEventEntries = 200;
 
+    private readonly Dispatcher _dispatcher;
     private readonly IEthercatDriveService _service;
     private readonly DispatcherTimer _pollTimer;
     private readonly CancellationTokenSource _lifetimeCts = new();
@@ -45,22 +47,29 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private bool _mqttConnected;
 
     public MainWindowViewModel()
+        : this(Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
     {
+    }
+
+    public MainWindowViewModel(Dispatcher dispatcher)
+    {
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+
         _statusQueue = new AsyncEventQueue<DriveStatusChangeEvent>(change =>
         {
-            Dispatcher.UIThread.Post(() => ProcessStatusChange(change));
+            _ = _dispatcher.BeginInvoke(new Action(() => ProcessStatusChange(change)));
             return ValueTask.CompletedTask;
         });
 
         _faultQueue = new AsyncEventQueue<SoemFaultEvent>(fault =>
         {
-            Dispatcher.UIThread.Post(() => ProcessFault(fault));
+            _ = _dispatcher.BeginInvoke(new Action(() => ProcessFault(fault)));
             return ValueTask.CompletedTask;
         });
 
         _logQueue = new AsyncEventQueue<LogEntryViewModel>(entry =>
         {
-            Dispatcher.UIThread.Post(() => ProcessLogEntry(entry));
+            _ = _dispatcher.BeginInvoke(new Action(() => ProcessLogEntry(entry)));
             return ValueTask.CompletedTask;
         });
 
@@ -85,11 +94,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             EnableCycleTraceLogging = false
         }, _loggerFactory.CreateLogger<EthercatDriveService>(), new SimulatedSoemClient());
 
-        _pollTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(200)
-        };
-        _pollTimer.Tick += (_, _) => RefreshSnapshot();
+        _pollTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Normal, (_, _) => RefreshSnapshot(), _dispatcher);
 
         EnableCommand = new AsyncRelayCommand(() => ExecutePerSlaveAsync(s => _service.EnableAsync(s, true, _lifetimeCts.Token)));
         DisableCommand = new AsyncRelayCommand(() => ExecutePerSlaveAsync(s => _service.EnableAsync(s, false, _lifetimeCts.Token)));
@@ -235,7 +240,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         await _service.InitializeAsync("simulated", _lifetimeCts.Token).ConfigureAwait(false);
         var slaveCount = await _service.GetSlaveCountAsync().ConfigureAwait(false);
 
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        await _dispatcher.InvokeAsync(() =>
         {
             Drives.Clear();
             for (var i = 1; i <= slaveCount; i++)
@@ -276,7 +281,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        _ = _dispatcher.BeginInvoke(new Action(() =>
         {
             for (var i = 0; i < Drives.Count && i < snapshot.DriveStates.Length; i++)
             {
@@ -284,7 +289,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             }
 
             CycleMetrics = $"WKC {snapshot.Health.LastWkc}/{snapshot.Health.GroupExpectedWkc} | Cycle {snapshot.CycleTime.TotalMilliseconds:F2} ms";
-        });
+        }));
     }
 
     private void OnStatusChanged(object? sender, DriveStatusChangeEvent e)
@@ -315,7 +320,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private void ProcessFault(SoemFaultEvent fault)
     {
         ConnectionStatus = $"Fault on slave {fault.Slave}: {fault.Error.Code}";
-        StatusEvents.Insert(0, new DriveEventViewModel(new DriveStatusChangeEvent(fault.Slave, DateTimeOffset.UtcNow, fault.Status, fault.Status, 0u, fault.Error.Code.ToString())));
+        StatusEvents.Insert(0, new DriveEventViewModel(new DriveStatusChangeEvent(
+            fault.Slave,
+            DateTimeOffset.UtcNow,
+            fault.Status,
+            fault.Status,
+            0u,
+            fault.Error.Code.ToString(),
+            TelemetrySync.GetTimestampTicks())));
         while (StatusEvents.Count > MaxEventEntries)
         {
             StatusEvents.RemoveAt(StatusEvents.Count - 1);
