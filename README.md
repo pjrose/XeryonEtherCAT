@@ -1,6 +1,6 @@
 # Xeryon EtherCAT Drive Service
 
-This repository delivers a production-grade EtherCAT client library and an Avalonia dashboard that targets Xeryon drives via the `soem_shim` native library. The managed core orchestrates PDO exchange through SOEM, enforces the Xeryon motion procedures, and exposes a high-level asynchronous API for motion, health monitoring, and automated recovery.
+This repository delivers a production-grade EtherCAT client library and a WPF dashboard that targets Xeryon drives via the `soem_shim` native library. The managed core orchestrates PDO exchange through SOEM, enforces the Xeryon motion procedures, and exposes a high-level asynchronous API for motion, health monitoring, and automated recovery.
 
 ## Solution layout
 
@@ -13,9 +13,9 @@ XeryonEtherCAT.sln
 │   ├── Models/                                        # DriveState helpers, DriveError, status snapshots
 │   ├── Options/EthercatDriveOptions.cs                # Cycle timing and recovery settings
 │   └── Services/EthercatDriveService.cs               # Core implementation with IO loop + command queue
-├── XeryonEtherCAT.App                                 # Avalonia dashboard that exercises the service
+├── XeryonEtherCAT.App                                 # WPF dashboard that exercises the service
 │   ├── Commands/AsyncRelayCommand.cs
-│   ├── MainWindow.axaml (+ .cs)
+│   ├── MainWindow.xaml (+ .cs)
 │   └── ViewModels/*                                   # Dashboard view model and drive status rows
 └── native/soemshim                                    # C shim around SOEM (see native/README)
 ```
@@ -42,7 +42,7 @@ dotnet build
 dotnet run --project XeryonEtherCAT.App
 ```
 
-The Avalonia app boots the `EthercatDriveService` against the in-process simulation backend, rendering a live dashboard with per-slave status, position feedback, and common motion controls (enable/disable, DPOS, SCAN, INDX, HALT, STOP, RSET). Once the native shim is deployed the same UI can drive real hardware by swapping the simulated client with the default SOEM client.
+The WPF app boots the `EthercatDriveService` against the in-process simulation backend, rendering a live dashboard with per-slave status, position feedback, and common motion controls (enable/disable, DPOS, SCAN, INDX, HALT, STOP, RSET). Once the native shim is deployed the same UI can drive real hardware by swapping the simulated client with the default SOEM client.
 
 ### Real-time telemetry & logging
 
@@ -118,7 +118,7 @@ Supported command keywords:
 
 Each command is executed through the high-level service API and publishes an acknowledgement message regardless of success, including the error text when something fails.
 
-Use the console harness' menu option **11) Toggle MQTT bridge** or the Avalonia UI controls to start/stop the bridge. Once connected all status/fault events are relayed while the application continues to operate normally.
+Use the console harness' menu option **11) Toggle MQTT bridge** or the WPF UI controls to start/stop the bridge. Once connected all status/fault events are relayed while the application continues to operate normally.
 
 ## Working with `IEthercatDriveService`
 

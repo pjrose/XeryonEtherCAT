@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\XeryonEtherCAT.Core\XeryonEtherCAT.Core.csproj" />
     <ProjectReference Include="..\XeryonEtherCAT.Integrations.Mqtt\XeryonEtherCAT.Integrations.Mqtt.csproj" />
+    <ProjectReference Include="..\XeryonEtherCAT.Integrations.Grpc\XeryonEtherCAT.Integrations.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>

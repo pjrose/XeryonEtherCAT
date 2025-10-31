@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.ConsoleHarne
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.Integrations.Mqtt", "XeryonEtherCAT.Integrations.Mqtt\XeryonEtherCAT.Integrations.Mqtt.csproj", "{AB2C10D4-04FA-400E-A7AD-48BDD198EA29}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XeryonEtherCAT.Integrations.Grpc", "XeryonEtherCAT.Integrations.Grpc\XeryonEtherCAT.Integrations.Grpc.csproj", "{BDC65E78-B2C0-4125-A743-179D0B75A98D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -39,8 +41,12 @@ Global
 		{830A58D9-B206-4E91-99B4-EFBBE3740C79}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{830A58D9-B206-4E91-99B4-EFBBE3740C79}.Release|Any CPU.Build.0 = Release|Any CPU
 		{AB2C10D4-04FA-400E-A7AD-48BDD198EA29}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{AB2C10D4-04FA-400E-A7AD-48BDD198EA29}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{AB2C10D4-04FA-400E-A7AD-48BDD198EA29}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{AB2C10D4-04FA-400E-A7AD-48BDD198EA29}.Release|Any CPU.Build.0 = Release|Any CPU
-	EndGlobalSection
+                {AB2C10D4-04FA-400E-A7AD-48BDD198EA29}.Debug|Any CPU.Build.0 = Debug|Any CPU
+                {AB2C10D4-04FA-400E-A7AD-48BDD198EA29}.Release|Any CPU.ActiveCfg = Release|Any CPU
+                {AB2C10D4-04FA-400E-A7AD-48BDD198EA29}.Release|Any CPU.Build.0 = Release|Any CPU
+                {BDC65E78-B2C0-4125-A743-179D0B75A98D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+                {BDC65E78-B2C0-4125-A743-179D0B75A98D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+                {BDC65E78-B2C0-4125-A743-179D0B75A98D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+                {BDC65E78-B2C0-4125-A743-179D0B75A98D}.Release|Any CPU.Build.0 = Release|Any CPU
+        EndGlobalSection
 EndGlobal
