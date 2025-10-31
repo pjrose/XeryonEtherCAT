@@ -2,6 +2,8 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Grpc.Core;
+using Grpc.Reflection;
+using Grpc.Reflection.V1Alpha;
 using Microsoft.Extensions.Logging;
 using XeryonEtherCAT.Core.Abstractions;
 
@@ -39,9 +41,15 @@ public sealed class EthercatGrpcServiceHost : IAsyncDisposable
         var serviceLogger = _loggerFactory.CreateLogger<EthercatGrpcService>();
         var service = new EthercatGrpcService(_driveService, _options, serviceLogger);
 
+        var reflectionServiceImpl = new ReflectionServiceImpl(EthercatControl.Descriptor);
+
         var server = new Server
         {
-            Services = { EthercatControl.BindService(service) },
+            Services =
+            {
+                EthercatControl.BindService(service),
+                ServerReflection.BindService(reflectionServiceImpl)
+            },
             Ports = { new ServerPort(_options.Host, _options.Port, ServerCredentials.Insecure) }
         };
 
