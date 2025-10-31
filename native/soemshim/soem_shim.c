@@ -419,44 +419,116 @@ SOEMSHIM_EXPORT soem_handle_t* soem_initialize(const char* ifname)
     return handle;
 }
 
+static int is_slave_really_op(ecx_contextt* ctx, int i)
+{
+    // This does a direct check on that slave.
+    // Returns 1 if slave reaches/reports OP, 0 otherwise.
+    uint16 rc = ecx_statecheck(ctx, i, EC_STATE_OPERATIONAL, 1000 /* us */);
+    return (rc == EC_STATE_OPERATIONAL);
+}
+
 SOEMSHIM_EXPORT int soem_try_recover(soem_handle_t* h, int timeout_ms)
 {
     if (!h) return 0;
-    ecx_readstate(&h->context);
 
+    ec_groupt* g = &h->context.grouplist[0];
+    int expected_wkc = (int)(g->outputsWKC * 2 + g->inputsWKC);
+
+    log_message(SOEM_LOG_WARN, "Starting recovery (expected_wkc=%d, last_wkc=%d)", expected_wkc, h->last_wkc);
+
+    // Read current states
+    ecx_readstate(&h->context);
+    int error_count = 0;
     for (int i = 1; i <= h->context.slavecount; ++i) {
         ec_slavet* s = &h->context.slavelist[i];
-        if (s->state & EC_STATE_ERROR) {
-            s->state = (uint16)(EC_STATE_SAFE_OP | EC_STATE_ACK);
-            ecx_writestate(&h->context, i);
+
+        int wkc_bad = (h->last_expected_wkc > 0 &&
+            h->last_wkc >= 0 &&
+            h->last_wkc < h->last_expected_wkc);
+
+        int really_op = is_slave_really_op(&h->context, i);
+
+
+        int unhealthy =
+            (s->state & EC_STATE_ERROR) ||
+            (s->state != EC_STATE_OPERATIONAL) ||
+            (s->islost != 0) ||
+            (wkc_bad && !really_op);   // <- key addition
+
+        if (unhealthy) {
+            log_message(SOEM_LOG_WARN,
+                "Slave %d not healthy (state=0x%04x AL=0x%04x islost=%d). Forcing full reinit.",
+                i, s->state, s->ALstatuscode, s->islost);
+
+            if (!force_full_reinit_slave(h, i, timeout_ms)) {
+                log_message(SOEM_LOG_ERR,
+                    "Slave %d failed full reinit to OP", i);
+            }
+
+            error_count++;
         }
     }
 
+    // If slaves were in error, give them time to acknowledge
+    if (error_count > 0) {
+        osal_usleep(10000); // 10ms settle time
+    }
+
+    // Request OPERATIONAL state for all slaves
     h->context.slavelist[0].state = EC_STATE_OPERATIONAL;
     ecx_writestate(&h->context, 0);
 
-    for (int k = 0; k < 3; ++k) {
+    // Send a few cycles to stabilize
+    for (int k = 0; k < 5; ++k) {
         ecx_send_processdata(&h->context);
-        ecx_receive_processdata(&h->context, 1000);
+        ecx_receive_processdata(&h->context, 2000); // Increased timeout
+        osal_usleep(2000); // 2ms between cycles
     }
 
-    // group-level check
+    // Verify all slaves reached OPERATIONAL
     int rc = ecx_statecheck(&h->context, 0, EC_STATE_OPERATIONAL, timeout_ms * 1000);
     if (rc != EC_STATE_OPERATIONAL)
     {
-        log_message(SOEM_LOG_WARN, "Group failed to reach OP in %d ms", timeout_ms);
+        log_message(SOEM_LOG_ERR, "Group failed to reach OPERATIONAL (got state=0x%04x) in %d ms", rc, timeout_ms);
         return 0;
     }
-    log_message(SOEM_LOG_INFO, "Recovery OK");
 
-    // per-slave verify
-    int ok = 1;
+    // **Critical: Verify WKC after recovery**
+    int wkc_ok = 0;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        ecx_send_processdata(&h->context);
+        int wkc = ecx_receive_processdata(&h->context, 2000);
+
+        log_message(SOEM_LOG_INFO, "Recovery WKC check attempt %d: wkc=%d expected=%d", attempt + 1, wkc, expected_wkc);
+
+        if (wkc >= expected_wkc) {
+            wkc_ok = 1;
+            break;
+        }
+        osal_usleep(5000); // 5ms between attempts
+    }
+
+    if (!wkc_ok) {
+        log_message(SOEM_LOG_ERR, "Recovery failed: WKC still low after 5 attempts");
+        return 0;
+    }
+
+    // Per-slave state verification
+    int all_op = 1;
     for (int i = 1; i <= h->context.slavecount; ++i) {
         if (h->context.slavelist[i].state != EC_STATE_OPERATIONAL) {
-            ok = 0; break;
+            log_message(SOEM_LOG_ERR, "Slave %d not OPERATIONAL after recovery (state=0x%04x)",
+                i, h->context.slavelist[i].state);
+            all_op = 0;
         }
     }
-    return ok;
+
+    if (all_op && wkc_ok) {
+        log_message(SOEM_LOG_INFO, "Recovery successful: all slaves OPERATIONAL with good WKC");
+        return 1;
+    }
+
+    return 0;
 }
 
 SOEMSHIM_EXPORT int soem_get_health(soem_handle_t* h, soem_health_t* out)
@@ -489,16 +561,70 @@ SOEMSHIM_EXPORT int soem_get_network_adapters()
     ec_adaptert* adapter = NULL;
     ec_adaptert* head = NULL;
 
-    LOGI("\nAvailable adapters:\n");
+    LOGI("\nAvailable adapters:");
     head = adapter = ec_find_adapters();
     while (adapter != NULL)
     {
-        LOGI("    - %s  (%s)\n", adapter->name, adapter->desc);
+        LOGI("    - %s  (%s)", adapter->name, adapter->desc);
         adapter = adapter->next;
     }
     ec_free_adapters(head);
     return 1;
 }
+
+
+// Force a single slave through INIT -> PRE_OP -> SAFE_OP -> OP
+// Returns 1 if it ends in OP, else 0.
+// timeout_ms applies per step.
+static int force_full_reinit_slave(soem_handle_t* h, int slave, int timeout_ms)
+{
+    if (!h || slave <= 0 || slave > h->context.slavecount) return 0;
+
+    ec_slavet* s = &h->context.slavelist[slave];
+
+    // INIT
+    s->state = EC_STATE_INIT;
+    ecx_writestate(&h->context, slave);
+    ecx_statecheck(&h->context, slave, EC_STATE_INIT, timeout_ms * 1000);
+
+    // PRE_OP
+    s->state = EC_STATE_PRE_OP;
+    ecx_writestate(&h->context, slave);
+    ecx_statecheck(&h->context, slave, EC_STATE_PRE_OP, timeout_ms * 1000);
+
+    // SAFE_OP
+    s->state = EC_STATE_SAFE_OP;
+    ecx_writestate(&h->context, slave);
+    ecx_statecheck(&h->context, slave, EC_STATE_SAFE_OP, timeout_ms * 1000);
+
+    // Clear ALstatuscode is not strictly required here,
+    // but it's useful to look at s->ALstatuscode for logging.
+    // (Some drives latch AL errors until they see SAFE_OP cleanly.)
+
+    // OPERATIONAL
+    s->state = EC_STATE_OPERATIONAL;
+    ecx_writestate(&h->context, slave);
+
+    // Verify OP
+    {
+        uint16 rc = ecx_statecheck(&h->context, slave, EC_STATE_OPERATIONAL, timeout_ms * 1000);
+        if (rc != EC_STATE_OPERATIONAL)
+        {
+            log_message(SOEM_LOG_ERR,
+                "force_full_reinit_slave(%d): failed to reach OP (rc=0x%04x AL=0x%04x)",
+                slave, rc, s->ALstatuscode);
+            return 0;
+        }
+    }
+
+    log_message(SOEM_LOG_INFO,
+        "force_full_reinit_slave(%d): slave reached OP cleanly (AL=0x%04x)",
+        slave, s->ALstatuscode);
+
+    return 1;
+}
+
+
 
 #ifdef __cplusplus
 }

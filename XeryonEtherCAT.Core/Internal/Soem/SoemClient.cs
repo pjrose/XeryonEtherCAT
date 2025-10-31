@@ -14,12 +14,18 @@ internal sealed class SoemClient : ISoemClient
 
     private readonly ILogger _logger;
 
+    // Keep a strong reference to prevent GC collection
+    private readonly SoemShim.SoemLogCallback _logCallback;
+
     public SoemClient(ILogger logger)
     {
         _logger = logger;
 
+        // Create delegate and keep reference
+        _logCallback = NativeLogHandler;
+
         // Register native log callback
-        SoemShim.soem_set_log_callback(NativeLogHandler);
+        SoemShim.soem_set_log_callback(_logCallback);
     }
 
     private void NativeLogHandler(SoemShim.SoemLogLevel level, string message)
@@ -58,6 +64,11 @@ internal sealed class SoemClient : ISoemClient
 
     public int ExchangeProcessData(IntPtr handle, int timeoutUs)
     {
+        if (handle == IntPtr.Zero)
+        {
+            _logger.LogWarning("ExchangeProcessData called with invalid handle.");
+            return -1;
+        }
         try
         {
             /*

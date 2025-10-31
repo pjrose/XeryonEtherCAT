@@ -10,7 +10,7 @@ public sealed class EthercatDriveOptions
     /// <summary>
     /// Target period of the IO loop.
     /// </summary>
-    public TimeSpan CyclePeriod { get; set; } = TimeSpan.FromMilliseconds(2);
+    public TimeSpan CyclePeriod { get; set; } = TimeSpan.FromMilliseconds(50);
 
     /// <summary>
     /// Timeout (in microseconds) passed to <c>soem_exchange_process_data</c>.
@@ -25,7 +25,7 @@ public sealed class EthercatDriveOptions
     /// <summary>
     /// Timeout passed to <c>soem_try_recover</c> in milliseconds.
     /// </summary>
-    public int RecoveryTimeoutMilliseconds { get; set; } = 500;
+    public int RecoveryTimeoutMilliseconds { get; set; } = 5000;
 
     /// <summary>
     /// Delay between recovery retries when a hard re-initialization is required.

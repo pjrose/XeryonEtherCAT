@@ -21,7 +21,7 @@ namespace XeryonEtherCAT.Core.Services;
 public sealed class EthercatDriveService : IEthercatDriveService
 {
     private readonly EthercatDriveOptions _options;
-    private readonly ILogger<EthercatDriveService> _logger;
+    private readonly ILogger _logger;
     private readonly ISoemClient _soem;
     private readonly Channel<PendingCommand> _commandChannel;
     private readonly object _lifecycleGate = new();
@@ -50,8 +50,9 @@ public sealed class EthercatDriveService : IEthercatDriveService
     private bool[] _stopLatch = Array.Empty<bool>();
     private SoemStatusSnapshot _snapshot = new(DateTimeOffset.UtcNow, new SoemHealthSnapshot(0, 0, 0, 0, 0, 0, 0), Array.Empty<SoemShim.DriveTxPDO>(), TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero);
     private int _wkcStrikes;
+    private int _fatalErrorCount;
 
-    public EthercatDriveService(EthercatDriveOptions? options = null, ILogger<EthercatDriveService>? logger = null, ISoemClient? soemClient = null)
+    public EthercatDriveService(EthercatDriveOptions? options = null, ILogger? logger = null, ISoemClient? soemClient = null)
     {
         _options = options ?? new EthercatDriveOptions();
         _logger = logger ?? NullLogger<EthercatDriveService>.Instance;
@@ -125,7 +126,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
         var status = snapshot.DriveStates.Length > axis ? snapshot.DriveStates[axis] : default;
         EnsureAxisReadyForMotion(slave, status, requireEncoder: true);
         var timeout = settleTimeout > TimeSpan.Zero ? settleTimeout : _options.DefaultSettleTimeout;
-        var command = PendingCommand.CreateMotion(axis, "DPOS", targetPos, vel, acc, dec, timeout, CommandCompletion.PositionReached, requiresAck: true);
+        var command = PendingCommand.CreateMotion(axis, "DPOS", targetPos, vel, acc, dec, timeout, CommandCompletion.PositionReached, requiresAck: true, _logger);
         await ExecuteCommandAsync(axis, command, ct).ConfigureAwait(false);
     }
 
@@ -141,7 +142,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
         var snapshot = GetStatus();
         var status = snapshot.DriveStates.Length > axis ? snapshot.DriveStates[axis] : default;
         EnsureAxisReadyForMotion(slave, status, requireEncoder: false);
-        var command = PendingCommand.CreateMotion(axis, "SCAN", direction, vel, acc, dec, TimeSpan.Zero, CommandCompletion.AckOnly, requiresAck: true);
+        var command = PendingCommand.CreateMotion(axis, "SCAN", direction, vel, acc, dec, TimeSpan.Zero, CommandCompletion.AckOnly, requiresAck: true, _logger);
         await ExecuteCommandAsync(axis, command, ct).ConfigureAwait(false);
     }
 
@@ -166,7 +167,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
 
         EnsureAxisReadyForMotion(slave, status, requireEncoder: false);
         var timeout = settleTimeout > TimeSpan.Zero ? settleTimeout : _options.DefaultSettleTimeout;
-        var command = PendingCommand.CreateMotion(axis, "INDX", direction, vel, acc, dec, timeout, CommandCompletion.Indexed, requiresAck: true);
+        var command = PendingCommand.CreateMotion(axis, "INDX", direction, vel, acc, dec, timeout, CommandCompletion.Indexed, requiresAck: true, _logger);
         await ExecuteCommandAsync(axis, command, ct).ConfigureAwait(false);
     }
 
@@ -370,22 +371,11 @@ public sealed class EthercatDriveService : IEthercatDriveService
             Deceleration = 0,
             Execute = 0
         };
-        FillCommand(ref pdo, "NOP");
+        PendingCommand.FillCommand(ref pdo, "NOP");
         return pdo;
     }
 
-    private static void FillCommand(ref SoemShim.DriveRxPDO pdo, string keyword)
-    {
-        if (pdo.Command == null || pdo.Command.Length != 32)
-        {
-            pdo.Command = new byte[32];
-        }
-
-        Array.Clear(pdo.Command, 0, 32);
-        var ascii = Encoding.ASCII.GetBytes(keyword);
-        var length = Math.Min(ascii.Length, 32);
-        Array.Copy(ascii, 0, pdo.Command, 0, length);
-    }
+   
 
     private void EnsureInitialized()
     {
@@ -442,14 +432,45 @@ public sealed class EthercatDriveService : IEthercatDriveService
             var wkc = _soem.ExchangeProcessData(_handle, _options.ExchangeTimeoutMicroseconds);
             var health = ReadHealth();
 
+            // Handle different error codes from SOEM
             if (wkc >= 0)
             {
+                // Success - process normally
+                _fatalErrorCount = 0;
                 ProcessStatuses(health, wkc);
+            }
+            else if (wkc == SoemErrorCodes.SOEM_ERR_WKC_LOW)
+            {
+                // Recoverable: working counter low
+                _logger.LogWarning("Working counter low: {Description}", SoemErrorCodes.GetErrorDescription(wkc));
+                _fatalErrorCount = 0;
+                ProcessStatuses(health, wkc);
+            }
+            else if (SoemErrorCodes.IsFatalError(wkc))
+            {
+                // Fatal errors: bad args, send fail, recv fail
+                _fatalErrorCount++;
+                _logger.LogError("Fatal EtherCAT error (#{Count}): {Code} - {Description}",
+                    _fatalErrorCount, wkc, SoemErrorCodes.GetErrorDescription(wkc));
+
+                // Attempt immediate recovery for fatal errors
+                if (_fatalErrorCount >= 3)
+                {
+                    _logger.LogCritical("Too many consecutive fatal errors ({Count}). Force reinitializing.", _fatalErrorCount);
+                    Reinitialize();
+                    _fatalErrorCount = 0;
+                    _wkcStrikes = 0;
+                }
+                else
+                {
+                    HandleFaultyCycle(health, wkc, $"Fatal communication error: {SoemErrorCodes.GetErrorDescription(wkc)}");
+                }
             }
             else
             {
-                _logger.LogWarning("Negative WKC {Wkc} detected.", wkc);
-                HandleFaultyCycle(health, wkc, "Negative work counter");
+                // Unknown error code
+                _logger.LogError("Unknown SOEM error code: {Wkc} - {Description}", wkc, SoemErrorCodes.GetErrorDescription(wkc));
+                HandleFaultyCycle(health, wkc, $"Unknown error code: {wkc}");
             }
 
             DrainErrorSink();
@@ -512,7 +533,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
 
             _activeCommands[axis] = command;
             command.Start();
-            _logger.LogDebug("Staged {Command} for slave {Slave}.", command.Keyword, axis + 1);
+            _logger.LogDebug("Staged {Command}={Parameter} for slave {Slave}.", command.Keyword, command.Parameter, axis + 1);
         }
     }
 
@@ -525,7 +546,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
             if (command is null)
             {
                 pdo.Execute = 0;
-                FillCommand(ref pdo, "NOP");
+                PendingCommand.FillCommand(ref pdo, "NOP");
                 pdo.Parameter = 0;
                 pdo.Velocity = 0;
                 pdo.Acceleration = 0;
@@ -537,7 +558,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 {
                     _activeCommands[i] = null;
                     pdo.Execute = 0;
-                    FillCommand(ref pdo, "NOP");
+                    PendingCommand.FillCommand(ref pdo, "NOP");
                     pdo.Parameter = 0;
                     pdo.Velocity = 0;
                     pdo.Acceleration = 0;
@@ -604,9 +625,8 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 // Update stored state
                 _previousTxPdos[i] = tx;
                 _txPdos[i] = tx;
-
+                
                 var command = _activeCommands[i];
-
                 // Raise status change event if anything changed during command execution
                 if ((changedMask != 0 || positionChanged) && (command != null))
                 {
@@ -620,7 +640,7 @@ public sealed class EthercatDriveService : IEthercatDriveService
                         command?.Keyword);
 
                     // Log the change with millisecond precision
-                    _logger.LogDebug("{StatusChange}", statusEvent.ToString());
+                    //_logger.LogDebug("{StatusChange}", statusEvent.ToString());
                     
                     // Raise event
                     StatusChanged?.Invoke(this, statusEvent);
@@ -640,8 +660,8 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 if (!command.Acked && tx.ExecuteAck != 0)
                 {
                     command.MarkAcked();
-                    _logger.LogDebug("[{Timestamp:HH:mm:ss.fff}] Command {Command} acknowledged for slave {Slave}.", 
-                        DateTimeOffset.UtcNow, command.Keyword, slaveIndex);
+                    _logger.LogDebug("[{Timestamp:HH:mm:ss.fff}] Command {Command}={Param} acknowledged for slave {Slave}.", 
+                        DateTimeOffset.UtcNow, command.Keyword, command.Parameter, slaveIndex);
                 }
 
                 if (TryDecodeError(tx, out var error))
@@ -667,13 +687,13 @@ public sealed class EthercatDriveService : IEthercatDriveService
                 switch (result)
                 {
                     case CommandState.Completed:
-                        _logger.LogDebug("[{Timestamp:HH:mm:ss.fff}] Command {Command} completed for slave {Slave}.", 
-                            DateTimeOffset.UtcNow, command.Keyword, slaveIndex);
+                        _logger.LogDebug("[{Timestamp:HH:mm:ss.fff}] Command {Command}={Parameter} completed for slave {Slave}.", 
+                            DateTimeOffset.UtcNow, command.Keyword, command.Parameter, slaveIndex);
                         command.Complete();
                         _activeCommands[i] = null;
                         break;
                     case CommandState.TimedOut:
-                        var timeoutError = new DriveError(DriveErrorCode.SafetyTimeout, $"Command {command.Keyword} timed out.", "Issue ENBL=1 or RSET, then retry with adjusted profile.");
+                        var timeoutError = new DriveError(DriveErrorCode.SafetyTimeout, $"Command {command.Keyword} timed out after {command.Timeout.TotalSeconds:F2} seconds.", "Issue ENBL=1 or RSET, then retry with adjusted profile.");
                         command.Fail(timeoutError);
                         RaiseFault(slaveIndex, tx, timeoutError, health);
                         _activeCommands[i] = null;
@@ -691,19 +711,30 @@ public sealed class EthercatDriveService : IEthercatDriveService
     private void HandleFaultyCycle(SoemHealthSnapshot health, int wkc, string reason)
     {
         _wkcStrikes++;
-        _logger.LogWarning("{Reason}: wkc={Wkc} expected={Expected} op={Op}", reason, health.LastWkc, health.GroupExpectedWkc, health.SlavesOperational);
+        _logger.LogWarning("{Reason}: wkc={Wkc} expected={Expected} op={Op} strikes={Strikes}",
+            reason, health.LastWkc, health.GroupExpectedWkc, health.SlavesOperational, _wkcStrikes);
+
         if (_wkcStrikes >= _options.WkcRecoveryThreshold)
         {
             _logger.LogError("WKC below expected for {Strikes} cycles. Attempting recovery.", _wkcStrikes);
-            if (_soem.TryRecover(_handle, _options.RecoveryTimeoutMilliseconds) <= 0)
+
+            var recoveryResult = _soem.TryRecover(_handle, _options.RecoveryTimeoutMilliseconds);
+            if (recoveryResult > 0)
+            {
+                // Recovery succeeded - give slaves time to settle
+                Thread.Sleep(20); // 20ms post-recovery settling time
+
+                _logger.LogInformation("Recovery successful, resetting strike counter.");
+                _wkcStrikes = 0;
+            }
+            else
             {
                 _logger.LogError("SOEM recovery failed. Reinitializing EtherCAT session.");
                 Reinitialize();
+                _wkcStrikes = 0;
             }
-            _wkcStrikes = 0;
         }
     }
-
     private void Reinitialize()
     {
         foreach (var command in _activeCommands)
@@ -854,161 +885,5 @@ public sealed class EthercatDriveService : IEthercatDriveService
         }
     }
 
-    private enum CommandCompletion
-    {
-        AckOnly,
-        PositionReached,
-        Indexed,
-        Enabled,
-        Disabled,
-        Halt,
-        AckWithTimeout
-    }
-
-    private enum CommandState
-    {
-        Pending,
-        Completed,
-        TimedOut
-    }
-
-    private sealed class PendingCommand
-    {
-        private readonly TaskCompletionSource _tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private CancellationTokenSource? _cancellationSource;
-        private readonly Stopwatch _stopwatch = new();
-        private readonly CommandCompletion _completion;
-        private readonly TimeSpan _timeout;
-
-        private PendingCommand(int slaveIndex, string keyword, int parameter, int velocity, ushort acc, ushort dec, TimeSpan timeout, CommandCompletion completion, bool requiresAck)
-        {
-            SlaveIndex = slaveIndex;
-            Keyword = keyword;
-            Parameter = parameter;
-            Velocity = velocity;
-            Acceleration = acc;
-            Deceleration = dec;
-            RequiresAck = requiresAck;
-            _completion = completion;
-            _timeout = timeout;
-        }
-
-        public int SlaveIndex { get; }
-
-        public string Keyword { get; }
-
-        public int Parameter { get; }
-
-        public int Velocity { get; }
-
-        public ushort Acceleration { get; }
-
-        public ushort Deceleration { get; }
-
-        public bool RequiresAck { get; }
-
-        public bool Acked { get; private set; }
-
-        public Task Task => _tcs.Task;
-
-        public bool Cancelled { get; private set; }
-
-        public void AttachCancellation(CancellationTokenSource source, Action onCancelled)
-        {
-            _cancellationSource = source;
-            source.Token.Register(() =>
-            {
-                Cancelled = true;
-                onCancelled();
-                _tcs.TrySetCanceled(source.Token);
-            });
-        }
-
-        public void Start()
-        {
-            _stopwatch.Restart();
-            Acked = false;
-        }
-
-        public void MarkAcked()
-        {
-            Acked = true;
-        }
-
-        public void Apply(ref SoemShim.DriveRxPDO pdo)
-        {
-            FillCommand(ref pdo, Keyword);
-            pdo.Parameter = Parameter;
-            pdo.Velocity = Velocity;
-            pdo.Acceleration = Acceleration;
-            pdo.Deceleration = Deceleration;
-            pdo.Execute = (byte)(Acked && RequiresAck ? 0 : 1);
-        }
-
-        public CommandState Evaluate(SoemShim.DriveTxPDO status)
-        {
-            // Special handling for AckWithTimeout - needs both ACK and full timeout duration
-            if (_completion == CommandCompletion.AckWithTimeout)
-            {
-                if (!Acked)
-                {
-                    // Still waiting for ACK
-                    if (_timeout > TimeSpan.Zero && _stopwatch.Elapsed > _timeout)
-                    {
-                        return CommandState.TimedOut; // Timed out without ACK
-                    }
-                    return CommandState.Pending;
-                }
-
-                // ACK received - now wait for timeout to complete
-                if (_timeout > TimeSpan.Zero && _stopwatch.Elapsed >= _timeout)
-                {
-                    return CommandState.Completed; // ACK + timeout both satisfied
-                }
-                return CommandState.Pending;
-            }
-
-            // General timeout check for all other completion types
-            if (_timeout > TimeSpan.Zero && _stopwatch.Elapsed > _timeout)
-            {
-                return CommandState.TimedOut;
-            }
-
-            return _completion switch
-            {
-                CommandCompletion.AckOnly => Acked ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.PositionReached => status.PositionReached != 0 ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Indexed => (status.EncoderValid != 0 && status.PositionReached != 0) ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Enabled => (status.AmplifiersEnabled != 0 && status.MotorOn != 0) ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Disabled => status.AmplifiersEnabled == 0 ? CommandState.Completed : CommandState.Pending,
-                CommandCompletion.Halt => status.Scanning == 0 ? CommandState.Completed : CommandState.Pending,
-                _ => CommandState.Pending,
-            };
-        }
-
-        public void Complete()
-        {
-            _tcs.TrySetResult();
-            _cancellationSource?.Dispose();
-        }
-
-        public void Fail(DriveError error)
-        {
-            if (error.Code == DriveErrorCode.None)
-            {
-                _tcs.TrySetException(new InvalidOperationException("Unknown drive fault."));
-            }
-            else
-            {
-                _tcs.TrySetException(new InvalidOperationException(error.ToString()));
-            }
-            _cancellationSource?.Dispose();
-        }
-
-        public static PendingCommand CreateMotion(int slaveIndex, string keyword, int parameter, int velocity, ushort acc, ushort dec, TimeSpan timeout, CommandCompletion completion, bool requiresAck)
-            => new(slaveIndex, keyword, parameter, velocity, acc, dec, timeout, completion, requiresAck);
-
-        public static PendingCommand CreateControl(int slaveIndex, string keyword, int parameter, TimeSpan timeout, CommandCompletion completion)
-            => new(slaveIndex, keyword, parameter, 0, 0, 0, timeout, completion, requiresAck: true);
-    }
+    
 }

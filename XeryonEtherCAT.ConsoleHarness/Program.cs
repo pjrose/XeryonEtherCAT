@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using XeryonEtherCAT.ConsoleHarness;
 using XeryonEtherCAT.Core.Internal.Soem;
 using XeryonEtherCAT.Core.Models;
 using XeryonEtherCAT.Core.Options;
@@ -8,6 +9,7 @@ using XeryonEtherCAT.Integrations.Mqtt;
 
 public class Program
 {
+
     public static async Task Main(string[] args)
     {
         using var loggerFactory = LoggerFactory.Create(builder =>
@@ -20,7 +22,8 @@ public class Program
             });
         });
 
-        await using var harness = new Harness(loggerFactory);
+        await using var consoleWriter = new ConsoleWriter();
+        await using var harness = new Harness(loggerFactory, consoleWriter);
         await harness.RunAsync();
     }
 }
@@ -37,12 +40,14 @@ internal sealed class Harness : IAsyncDisposable
     private readonly AsyncEventQueue<ConsoleMessage> _eventQueue;
     private readonly EthercatMqttBridgeOptions _mqttOptions = new();
 
+    private readonly ConsoleWriter _consoleWriter;
     private EthercatDriveService? _service;
     private string? _interfaceName;
     private EthercatMqttBridge? _mqttBridge;
 
-    public Harness(ILoggerFactory loggerFactory)
+    public Harness(ILoggerFactory loggerFactory, ConsoleWriter consoleWriter)
     {
+        _consoleWriter = consoleWriter;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger("Harness");
         _soemClient = new SoemClient(loggerFactory.CreateLogger("SoemClient"));
@@ -52,12 +57,12 @@ internal sealed class Harness : IAsyncDisposable
             {
                 var original = Console.ForegroundColor;
                 Console.ForegroundColor = color;
-                Console.WriteLine(message.Message);
+                _consoleWriter.WriteLine(message.Message);
                 Console.ForegroundColor = original;
             }
             else
             {
-                Console.WriteLine(message.Message);
+                _consoleWriter.WriteLine(message.Message);
             }
 
             return ValueTask.CompletedTask;
@@ -72,7 +77,7 @@ internal sealed class Harness : IAsyncDisposable
             PrintMenu();
             Console.Write("Select option: ");
             var choice = (Console.ReadLine() ?? string.Empty).Trim();
-            Console.WriteLine();
+            _consoleWriter.WriteLine();
 
             try
             {
@@ -115,20 +120,20 @@ internal sealed class Harness : IAsyncDisposable
                         exit = true;
                         break;
                     default:
-                        Console.WriteLine("Unknown selection. Please choose an item from the menu.");
+                        _consoleWriter.WriteLine("Unknown selection. Please choose an item from the menu.");
                         break;
                 }
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("Operation canceled.");
+                _consoleWriter.WriteLine("Operation canceled.");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Operation failed");
             }
 
-            Console.WriteLine();
+            _consoleWriter.WriteLine();
         }
 
         await ShutdownAsync().ConfigureAwait(false);
@@ -143,38 +148,40 @@ internal sealed class Harness : IAsyncDisposable
 
     private void PrintMenu()
     {
-        Console.WriteLine("==== Xeryon EtherCAT Service Harness ====");
-        Console.WriteLine(" 1) List network adapters");
-        Console.WriteLine(" 2) Initialize EtherCAT session");
-        Console.WriteLine(" 3) Shutdown session");
-        Console.WriteLine(" 4) Query slave devices / status snapshot");
-        Console.WriteLine(" 5) Run process data soak test");
-        Console.WriteLine(" 6) Issue Reset and Enable");
-        Console.WriteLine(" 7) Cable disconnect / re-init drill");
-        Console.WriteLine(" 8) Send raw command frame");
-        Console.WriteLine(" 9) Demonstrate command queueing");
-        Console.WriteLine("10) Reset / homing / recovery workflow");
-        Console.WriteLine("11) Toggle MQTT bridge");
-        Console.WriteLine(" 0) Exit");
+        _consoleWriter.WriteLine("==== Xeryon EtherCAT Service Harness ====");
+        _consoleWriter.WriteLine(" 1) List network adapters");
+        _consoleWriter.WriteLine(" 2) Initialize EtherCAT session");
+        _consoleWriter.WriteLine(" 3) Shutdown session");
+        _consoleWriter.WriteLine(" 4) Query slave devices / status snapshot");
+        _consoleWriter.WriteLine(" 5) Run process data soak test");
+        _consoleWriter.WriteLine(" 6) Issue Reset and Enable");
+        _consoleWriter.WriteLine(" 7) Cable disconnect / re-init drill");
+        _consoleWriter.WriteLine(" 8) Send raw command frame");
+        _consoleWriter.WriteLine(" 9) Demonstrate command queueing");
+        _consoleWriter.WriteLine("10) Reset / homing / recovery workflow");
+        _consoleWriter.WriteLine("11) Toggle MQTT bridge");
+        _consoleWriter.WriteLine(" 0) Exit");
     }
 
     private async Task InitializeAsync()
     {
         if (_service is not null)
         {
-            Console.WriteLine($"Service already initialized on {_interfaceName}. Use option 3 to shut it down first.");
+            _consoleWriter.WriteLine($"Service already initialized on {_interfaceName}. Use option 3 to shut it down first.");
             return;
         }
 
-        Console.Write("Network interface (e.g. eth0): ");
-        var iface = (Console.ReadLine() ?? string.Empty).Trim();
+        Console.Write("Network interface (e.g. \\Device\\NPF_{2137B336-5E02-4034-A2A3-C1F7F0ACA9CD}): ");
+        var iface = Console.ReadLine()?.Trim();
+        if(string.IsNullOrEmpty(iface))
+            iface =  "\\Device\\NPF_{2137B336-5E02-4034-A2A3-C1F7F0ACA9CD}";
         if (string.IsNullOrWhiteSpace(iface))
         {
-            Console.WriteLine("Interface name is required.");
+            _consoleWriter.WriteLine("Interface name is required.");
             return;
         }
 
-        Console.Write("Cycle period in ms (default 2): ");
+        Console.Write("Cycle period in ms (default 50): ");
         if (double.TryParse(Console.ReadLine(), out var ms) && ms > 0)
         {
             _options.CyclePeriod = TimeSpan.FromMilliseconds(ms);
@@ -196,14 +203,14 @@ internal sealed class Harness : IAsyncDisposable
                 options.TimestampFormat = "HH:mm:ss.fff ";
             });
         });
-        _service = new EthercatDriveService(_options, _serviceLoggerFactory.CreateLogger<EthercatDriveService>(), _soemClient);
+        _service = new EthercatDriveService(_options, _serviceLoggerFactory.CreateLogger("EthercatDriveService"), _soemClient);
         _service.Faulted += OnFaulted;
         _service.StatusChanged += OnStatusChanged;
 
         await _service.InitializeAsync(iface, CancellationToken.None).ConfigureAwait(false);
         _interfaceName = iface;
         var slaves = await _service.GetSlaveCountAsync().ConfigureAwait(false);
-        Console.WriteLine($"Initialized on {iface} with {slaves} slave(s).");
+        _consoleWriter.WriteLine($"Initialized on {iface} with {slaves} slave(s).");
     }
 
     private async Task ShutdownAsync()
@@ -218,7 +225,7 @@ internal sealed class Harness : IAsyncDisposable
         _service.StatusChanged -= OnStatusChanged;
         _service = null;
         _interfaceName = null;
-        Console.WriteLine("Service shut down.");
+        _consoleWriter.WriteLine("Service shut down.");
 
         if (_mqttBridge is not null)
         {
@@ -246,7 +253,7 @@ internal sealed class Harness : IAsyncDisposable
     {
         if (_service is null)
         {
-            Console.WriteLine("Initialize the EtherCAT service before starting the MQTT bridge.");
+            _consoleWriter.WriteLine("Initialize the EtherCAT service before starting the MQTT bridge.");
             return;
         }
 
@@ -272,7 +279,7 @@ internal sealed class Harness : IAsyncDisposable
             {
                 await bridge.StartAsync(CancellationToken.None).ConfigureAwait(false);
                 _mqttBridge = bridge;
-                Console.WriteLine($"MQTT bridge connected to {_mqttOptions.BrokerHost}:{_mqttOptions.BrokerPort}.");
+                _consoleWriter.WriteLine($"MQTT bridge connected to {_mqttOptions.BrokerHost}:{_mqttOptions.BrokerPort}.");
             }
             catch (Exception ex)
             {
@@ -285,7 +292,7 @@ internal sealed class Harness : IAsyncDisposable
             await _mqttBridge.StopAsync(CancellationToken.None).ConfigureAwait(false);
             await _mqttBridge.DisposeAsync().ConfigureAwait(false);
             _mqttBridge = null;
-            Console.WriteLine("MQTT bridge disconnected.");
+            _consoleWriter.WriteLine("MQTT bridge disconnected.");
         }
     }
 
@@ -295,16 +302,16 @@ internal sealed class Harness : IAsyncDisposable
         var count = await service.GetSlaveCountAsync().ConfigureAwait(false);
         var snapshot = service.GetStatus();
 
-        Console.WriteLine($"Slaves: {count}, Operational: {snapshot.Health.SlavesOperational}, WKC: {snapshot.Health.LastWkc}/{snapshot.Health.GroupExpectedWkc}");
-        Console.WriteLine($"IO bytes: out={snapshot.Health.BytesOut} in={snapshot.Health.BytesIn}");
-        Console.WriteLine($"Cycle: last={snapshot.CycleTime.TotalMilliseconds:F2} ms min={snapshot.MinCycleTime.TotalMilliseconds:F2} ms max={snapshot.MaxCycleTime.TotalMilliseconds:F2} ms");
+        _consoleWriter.WriteLine($"Slaves: {count}, Operational: {snapshot.Health.SlavesOperational}, WKC: {snapshot.Health.LastWkc}/{snapshot.Health.GroupExpectedWkc}");
+        _consoleWriter.WriteLine($"IO bytes: out={snapshot.Health.BytesOut} in={snapshot.Health.BytesIn}");
+        _consoleWriter.WriteLine($"Cycle: last={snapshot.CycleTime.TotalMilliseconds:F2} ms min={snapshot.MinCycleTime.TotalMilliseconds:F2} ms max={snapshot.MaxCycleTime.TotalMilliseconds:F2} ms");
 
         for (var i = 0; i < snapshot.DriveStates.Length; i++)
         {
             var status = snapshot.DriveStates[i];
             var mask = DriveStateFormatter.ToBitMask(status);
             var hex = DriveStateFormatter.DriveTxPdoToHexString(status);
-            Console.WriteLine($"Slave {i + 1}: {hex} [{DriveStateFormatter.Describe(status)}]");
+            _consoleWriter.WriteLine($"Slave {i + 1}: {hex} [{DriveStateFormatter.Describe(status)}]");
         }
     }
 
@@ -315,7 +322,7 @@ internal sealed class Harness : IAsyncDisposable
         Console.Write("Duration in minutes (default 1): ");
         var durationInput = Console.ReadLine();
         var duration = TimeSpan.FromMinutes(double.TryParse(durationInput, out var mins) && mins > 0 ? mins : 1);
-        Console.WriteLine($"Running soak test for {duration.TotalMinutes:F1} minute(s). Press Ctrl+C to abort.");
+        _consoleWriter.WriteLine($"Running soak test for {duration.TotalMinutes:F1} minute(s). Press Ctrl+C to abort.");
 
         using var cts = new CancellationTokenSource();
         ConsoleCancelEventHandler? handler = null;
@@ -338,25 +345,25 @@ internal sealed class Harness : IAsyncDisposable
                 var wkcHealthy = health.LastWkc >= health.GroupExpectedWkc;
 
                 // Log full health snapshot every cycle
-                Console.WriteLine($"[{DateTimeOffset.UtcNow:HH:mm:ss}] Cycle {cycle++}: WKC {health.LastWkc}/{health.GroupExpectedWkc} OP {health.SlavesOperational}/{count} | Bytes out={health.BytesOut} in={health.BytesIn} AL={health.AlStatusCode:X}");
+                _consoleWriter.WriteLine($"[{DateTimeOffset.UtcNow:HH:mm:ss}] Cycle {cycle++}: WKC {health.LastWkc}/{health.GroupExpectedWkc} OP {health.SlavesOperational}/{count} | Bytes out={health.BytesOut} in={health.BytesIn} AL={health.AlStatusCode:X}");
                 if (cycle == 1 || lastSnapshot == null ||
                     health.LastWkc != lastSnapshot.Health.LastWkc ||
                     health.GroupExpectedWkc != lastSnapshot.Health.GroupExpectedWkc ||
                     health.SlavesOperational != lastSnapshot.Health.SlavesOperational)
                 {
-                    Console.WriteLine($"  [DEBUG] Health: Found={health.SlavesFound} OP={health.SlavesOperational} WKC={health.LastWkc}/{health.GroupExpectedWkc} BytesOut={health.BytesOut} BytesIn={health.BytesIn} AL={health.AlStatusCode:X}");
+                    _consoleWriter.WriteLine($"  [DEBUG] Health: Found={health.SlavesFound} OP={health.SlavesOperational} WKC={health.LastWkc}/{health.GroupExpectedWkc} BytesOut={health.BytesOut} BytesIn={health.BytesIn} AL={health.AlStatusCode:X}");
                 }
 
                 for (var i = 0; i < snapshot.DriveStates.Length; i++)
                 {
                     var status = snapshot.DriveStates[i];
                     var hexString = DriveStateFormatter.ToHexString(status);
-                    Console.WriteLine($"  Slave {i + 1}: pos: {status.ActualPosition} status: {hexString}");
+                    _consoleWriter.WriteLine($"  Slave {i + 1}: pos: {status.ActualPosition} status: {hexString}");
                 }
 
                 if (!wkcHealthy)
                 {
-                    Console.WriteLine("[WARN] Work counter below expected threshold. Ending soak test.");
+                    _consoleWriter.WriteLine("[WARN] Work counter below expected threshold. Ending soak test.");
                     break;
                 }
 
@@ -366,7 +373,7 @@ internal sealed class Harness : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            Console.WriteLine("[INFO] Soak test canceled by user.");
+            _consoleWriter.WriteLine("[INFO] Soak test canceled by user.");
         }
         finally
         {
@@ -382,7 +389,7 @@ internal sealed class Harness : IAsyncDisposable
         var service = RequireService();
         var count = await service.GetSlaveCountAsync().ConfigureAwait(false);
         var axis = ReadInt("Slave number", 1);
-        Console.WriteLine($"Running ResetAsync on slave {axis}...");
+        _consoleWriter.WriteLine($"Running ResetAsync on slave {axis}...");
 
         try
         {
@@ -390,7 +397,7 @@ internal sealed class Harness : IAsyncDisposable
             await service.ResetAsync(axis, resetCts.Token).ConfigureAwait(false);
 
             await ShowStatusAsync();
-            Console.WriteLine("Reset complete, press enter to enable...");
+            _consoleWriter.WriteLine("Reset complete, press enter to enable...");
             Console.ReadLine();
 
             using var enableCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -398,7 +405,7 @@ internal sealed class Harness : IAsyncDisposable
 
             using var indexCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await ShowStatusAsync();
-            Console.WriteLine("Enabled, press enter to index...");
+            _consoleWriter.WriteLine("Enabled, press enter to index...");
             Console.ReadLine();
             await service.IndexAsync(axis, 1, 10000, 10000, 10000, TimeSpan.FromSeconds(10), indexCts.Token).ConfigureAwait(false);
         }
@@ -407,14 +414,14 @@ internal sealed class Harness : IAsyncDisposable
             _logger.LogError(ex, "Recovery command failed for slave {Slave}", axis);
         }
 
-        Console.WriteLine("Recovery sequence complete. Observe status via option 4.");
+        _consoleWriter.WriteLine("Recovery sequence complete. Observe status via option 4.");
     }
 
     private async Task CableDisconnectDrillAsync()
     {
         var service = RequireService();
         var count = await service.GetSlaveCountAsync().ConfigureAwait(false);
-        Console.WriteLine("Disconnect the EtherCAT cable now, then press Enter to start monitoring.");
+        _consoleWriter.WriteLine("Disconnect the EtherCAT cable now, then press Enter to start monitoring.");
         Console.ReadLine();
 
         SoemStatusSnapshot snapshot;
@@ -423,31 +430,31 @@ internal sealed class Harness : IAsyncDisposable
             snapshot = service.GetStatus();
             if (snapshot.Health.LastWkc < snapshot.Health.GroupExpectedWkc || snapshot.Health.SlavesOperational < count)
             {
-                Console.WriteLine($"Link loss detected (WKC {snapshot.Health.LastWkc}/{snapshot.Health.GroupExpectedWkc}, OP {snapshot.Health.SlavesOperational}/{count}).");
+                _consoleWriter.WriteLine($"Link loss detected (WKC {snapshot.Health.LastWkc}/{snapshot.Health.GroupExpectedWkc}, OP {snapshot.Health.SlavesOperational}/{count}).");
                 break;
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
         }
 
-        Console.WriteLine("Reconnect the cable and press Enter once link is restored.");
+        _consoleWriter.WriteLine("Reconnect the cable and press Enter once link is restored.");
         Console.ReadLine();
 
-        Console.WriteLine("Waiting for service to re-initialize...");
+        _consoleWriter.WriteLine("Waiting for service to re-initialize...");
         var timeout = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
         while (DateTimeOffset.UtcNow < timeout)
         {
             snapshot = service.GetStatus();
             if (snapshot.Health.LastWkc >= snapshot.Health.GroupExpectedWkc && snapshot.Health.SlavesOperational == count)
             {
-                Console.WriteLine("Link restored and process data healthy.");
+                _consoleWriter.WriteLine("Link restored and process data healthy.");
                 return;
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
         }
 
-        Console.WriteLine("Timed out waiting for clean re-initialization.");
+        _consoleWriter.WriteLine("Timed out waiting for clean re-initialization.");
     }
 
     private async Task SendRawCommandAsync()
@@ -458,7 +465,7 @@ internal sealed class Harness : IAsyncDisposable
         var keyword = (Console.ReadLine() ?? string.Empty).Trim();
         if (keyword.Length == 0)
         {
-            Console.WriteLine("Command keyword is required.");
+            _consoleWriter.WriteLine("Command keyword is required.");
             return;
         }
 
@@ -474,7 +481,7 @@ internal sealed class Harness : IAsyncDisposable
 
         using var cts = CreateCancellation(timeout ?? TimeSpan.FromSeconds(15));
         await service.SendRawCommandAsync(slave, keyword, parameter, velocity, acceleration, deceleration, requiresAck, timeout, cts.Token).ConfigureAwait(false);
-        Console.WriteLine("Command dispatched successfully.");
+        _consoleWriter.WriteLine("Command dispatched successfully.");
     }
 
     private async Task DemonstrateCommandQueueAsync()
@@ -487,7 +494,7 @@ internal sealed class Harness : IAsyncDisposable
         var acc = (ushort)Math.Clamp(ReadInt("Acceleration", 1000), 0, ushort.MaxValue);
         var dec = (ushort)Math.Clamp(ReadInt("Deceleration", 1000), 0, ushort.MaxValue);
         var moves = Math.Clamp(ReadInt("Number of queued moves", 3), 1, 10);
-        Console.WriteLine("Queueing commands concurrently...");
+        _consoleWriter.WriteLine("Queueing commands concurrently...");
 
         var tasks = new List<Task>();
         for (var i = 0; i < moves; i++)
@@ -497,25 +504,25 @@ internal sealed class Harness : IAsyncDisposable
             {
                 using var cts = CreateCancellation(TimeSpan.FromSeconds(30));
                 await service.MoveAbsoluteAsync(slave, target, velocity, acc, dec, TimeSpan.FromSeconds(5), cts.Token).ConfigureAwait(false);
-                Console.WriteLine($"Move to {target} completed.");
+                _consoleWriter.WriteLine($"Move to {target} completed.");
             }));
         }
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
-        Console.WriteLine("Queue demonstration complete.");
+        _consoleWriter.WriteLine("Queue demonstration complete.");
     }
 
     private async Task RunRecoveryWorkflowAsync()
     {
         var service = RequireService();
         var slave = ReadInt("Slave to recover", 1);
-        Console.WriteLine("Beginning reset -> enable -> homing sequence...");
+        _consoleWriter.WriteLine("Beginning reset -> enable -> homing sequence...");
 
         using var cts = CreateCancellation(TimeSpan.FromSeconds(60));
         await service.ResetAsync(slave, cts.Token).ConfigureAwait(false);
         await service.EnableAsync(slave, true, cts.Token).ConfigureAwait(false);
         await service.IndexAsync(slave, 1, ReadInt("Homing velocity", 25000), (ushort)Math.Clamp(ReadInt("Homing acceleration", 1000), 0, ushort.MaxValue), (ushort)Math.Clamp(ReadInt("Homing deceleration", 1000), 0, ushort.MaxValue), TimeSpan.FromSeconds(20), cts.Token).ConfigureAwait(false);
-        Console.WriteLine("Homing complete. Optional absolute move follows.");
+        _consoleWriter.WriteLine("Homing complete. Optional absolute move follows.");
 
         if (AskYesNo("Execute absolute move? (y/N): "))
         {
@@ -524,13 +531,13 @@ internal sealed class Harness : IAsyncDisposable
             var acceleration = (ushort)Math.Clamp(ReadInt("Acceleration", 2000), 0, ushort.MaxValue);
             var deceleration = (ushort)Math.Clamp(ReadInt("Deceleration", 2000), 0, ushort.MaxValue);
             await service.MoveAbsoluteAsync(slave, position, velocity, acceleration, deceleration, TimeSpan.FromSeconds(10), cts.Token).ConfigureAwait(false);
-            Console.WriteLine("Move complete.");
+            _consoleWriter.WriteLine("Move complete.");
         }
 
         if (AskYesNo("Issue STOP latch? (y/N): "))
         {
             await service.StopAsync(slave, cts.Token).ConfigureAwait(false);
-            Console.WriteLine("STOP latched. Use ENBL=1 to clear before motion.");
+            _consoleWriter.WriteLine("STOP latched. Use ENBL=1 to clear before motion.");
         }
     }
 
